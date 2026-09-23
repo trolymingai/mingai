@@ -55,7 +55,7 @@ export function AboutDialog({ open, onOpenChange }: AboutDialogProps) {
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2.5">
-            <img src="/goclaw-icon.svg" alt="GoClaw" className="h-7 w-7" />
+            <img src="/goclaw-icon.svg" alt="Ming AI" className="h-7 w-7 rounded-md" />
             {t("about.title")}
             {updateAvailable && latestVersion && (
               <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
@@ -119,26 +119,6 @@ export function AboutDialog({ open, onOpenChange }: AboutDialogProps) {
               )}
             </div>
           )}
-
-          {/* Links */}
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-            {[
-              { label: t("about.sourceCode"), href: "https://github.com/nextlevelbuilder/goclaw" },
-              { label: t("about.license"), href: "https://creativecommons.org/licenses/by-nc/4.0/" },
-              { label: t("about.documentation"), href: "https://docs.goclaw.sh" },
-              { label: t("about.reportBug"), href: "https://github.com/nextlevelbuilder/goclaw/issues" },
-            ].map(({ label, href }) => (
-              <a
-                key={label}
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary hover:underline"
-              >
-                {label}
-              </a>
-            ))}
-          </div>
         </div>
 
         <DialogFooter showCloseButton />

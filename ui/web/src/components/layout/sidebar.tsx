@@ -71,14 +71,14 @@ export function Sidebar({ collapsed, onNavItemClick }: SidebarProps) {
       <div className="flex h-14 items-center border-b px-4">
         {!collapsed && (
           <div className="flex items-center gap-2.5">
-            <img src="/goclaw-icon.svg" alt="GoClaw" className="h-8 w-8" />
+            <img src="/goclaw-icon.svg" alt="Ming AI" className="h-8 w-8 rounded-lg shadow-xs" />
             <span className="text-lg font-bold tracking-tight text-sidebar-primary">
-              GoClaw
+              Ming AI
             </span>
           </div>
         )}
         {collapsed && (
-          <img src="/goclaw-icon.svg" alt="GoClaw" className="mx-auto h-7 w-7" />
+          <img src="/goclaw-icon.svg" alt="Ming AI" className="mx-auto h-7 w-7 rounded-md" />
         )}
       </div>
 
