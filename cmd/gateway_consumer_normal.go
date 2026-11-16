@@ -93,6 +93,10 @@ func processNormalMessage(
 			// Discord guild: per-user scope so each member has own profile
 			// across all channels in the same server.
 			userID = fmt.Sprintf("guild:%s:user:%s", guildID, msg.SenderID)
+		} else if msg.Channel == "zalo-ming-ai" || (deps.ChannelMgr != nil && deps.ChannelMgr.ChannelTypeForName(msg.Channel) == "zalo_personal") {
+			// Ming AI Zalo Personal: keep userID tied to SenderID so memory, profiles & context files
+			// are 100% unified across Group chats and 1-on-1 DMs for each employee!
+			userID = msg.SenderID
 		} else {
 			groupID := msg.ChatID
 			userID = fmt.Sprintf("group:%s:%s", msg.Channel, groupID)
@@ -264,6 +268,35 @@ func processNormalMessage(
 			"- Keep responses concise and focused; long replies are disruptive in groups.\n" +
 			"- Write like a human. Avoid Markdown tables. Use real line breaks sparingly.\n" +
 			"- Address the group naturally. If the history shows a multi-person conversation, consider the full context before answering."
+	}
+
+	// Cross-session memory bridge for Ming AI:
+	// When staff chats in DM, provide awareness of their personal continuity.
+	// When staff chats in Group, provide awareness of their recent 1-on-1 DM conversations.
+	if (msg.Channel == "zalo-ming-ai" || (deps.ChannelMgr != nil && deps.ChannelMgr.ChannelTypeForName(msg.Channel) == "zalo_personal")) && msg.SenderID != "" && !bus.IsInternalSender(msg.SenderID) && deps.SessStore != nil {
+		if peerKind == string(sessions.PeerGroup) {
+			dmKey := sessions.BuildSessionKey(agentID, msg.Channel, sessions.PeerDirect, msg.SenderID)
+			history := deps.SessStore.GetHistory(ctx, dmKey)
+			if len(history) > 0 {
+				lastIdx := len(history) - 1
+				recentMsg := history[lastIdx]
+				if recentMsg.Content != "" {
+					contentSnippet := recentMsg.Content
+					if len(contentSnippet) > 200 {
+						contentSnippet = contentSnippet[:200] + "..."
+					}
+					if extraPrompt != "" {
+						extraPrompt += "\n\n"
+					}
+					extraPrompt += fmt.Sprintf("[Bối cảnh đồng bộ - Chat riêng 1-1 gần nhất với nhân viên %s]: %q", msg.SenderID, contentSnippet)
+				}
+			}
+		} else if peerKind == string(sessions.PeerDirect) {
+			if extraPrompt != "" {
+				extraPrompt += "\n\n"
+			}
+			extraPrompt += fmt.Sprintf("[Bối cảnh nhân sự]: Đang trò chuyện trực tiếp 1-1 với nhân viên Zalo ID: %s. Hãy đồng bộ và liên kết các thông tin, checklist, phản hồi trước đó để hỗ trợ thông suốt.", msg.SenderID)
+		}
 	}
 
 	// Append per-topic system prompt (from group/topic config hierarchy).

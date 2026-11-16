@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -161,6 +162,16 @@ func getServiceURL(sess *Session, service string) string {
 		urls = sess.LoginInfo.ZpwServiceMapV3.Profile
 	case "group_poll":
 		urls = sess.LoginInfo.ZpwServiceMapV3.GroupPoll
+	case "reaction":
+		urls = sess.LoginInfo.ZpwServiceMapV3.Reaction
+		if len(urls) == 0 {
+			urls = sess.LoginInfo.ZpwServiceMapV3.Chat
+		}
+	case "friend":
+		urls = sess.LoginInfo.ZpwServiceMapV3.Friend
+		if len(urls) == 0 {
+			urls = sess.LoginInfo.ZpwServiceMapV3.Profile
+		}
 	}
 	if len(urls) == 0 {
 		return ""
@@ -179,4 +190,83 @@ func encryptPayload(sess *Session, payload map[string]any) (string, error) {
 		return "", fmt.Errorf("decode secret key: %w", err)
 	}
 	return EncodeAESCBC(key, string(blob), false)
+}
+
+// SendReaction sends a reaction (e.g. heart "/-heart" with rType=5) to a message in group or DM.
+func SendReaction(ctx context.Context, sess *Session, threadID string, threadType ThreadType, msgID string, cliMsgID string, icon string, rType int) error {
+	baseURL := getServiceURL(sess, "reaction")
+	if baseURL == "" {
+		return fmt.Errorf("zalo_personal: no reaction service URL")
+	}
+
+	apiPath := "/api/message/reaction"
+	if threadType == ThreadTypeGroup {
+		apiPath = "/api/group/reaction"
+	}
+
+	gMsgID, _ := strconv.ParseInt(msgID, 10, 64)
+	cMsgID, _ := strconv.ParseInt(cliMsgID, 10, 64)
+	if cMsgID == 0 {
+		cMsgID = time.Now().UnixMilli()
+	}
+
+	detail := map[string]any{
+		"rMsg": []map[string]any{
+			{
+				"gMsgID":  gMsgID,
+				"cMsgID":  cMsgID,
+				"msgType": 1,
+			},
+		},
+		"rIcon":  icon,
+		"rType":  rType,
+		"source": 6,
+	}
+	detailJSON, err := json.Marshal(detail)
+	if err != nil {
+		return err
+	}
+
+	params := map[string]any{
+		"react_list": []map[string]any{
+			{
+				"message":  string(detailJSON),
+				"clientId": time.Now().UnixMilli(),
+			},
+		},
+	}
+	if threadType == ThreadTypeGroup {
+		params["grid"] = threadID
+		params["imei"] = sess.IMEI
+	} else {
+		params["toid"] = threadID
+	}
+
+	encData, err := encryptPayload(sess, params)
+	if err != nil {
+		return fmt.Errorf("zalo_personal: encrypt reaction: %w", err)
+	}
+
+	reactURL := makeURL(sess, baseURL+apiPath, nil, true)
+	form := buildFormBody(map[string]string{"params": encData})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reactURL, form)
+	if err != nil {
+		return err
+	}
+	setDefaultHeaders(req, sess)
+
+	resp, err := sess.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("zalo_personal: send reaction: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var envelope Response[any]
+	if err := readJSON(resp, &envelope); err != nil {
+		return fmt.Errorf("zalo_personal: parse reaction response: %w", err)
+	}
+	if envelope.ErrorCode != 0 {
+		return fmt.Errorf("zalo_personal: reaction error %d: %s", envelope.ErrorCode, envelope.ErrorMessage)
+	}
+	return nil
 }

@@ -105,6 +105,7 @@ func (ln *Listener) handleControlEvents(ctx context.Context, data string, encTyp
 			Controls []struct {
 				Content struct {
 					ActType string          `json:"act_type"`
+					Act     string          `json:"act"`
 					FileID  any             `json:"fileId"` // can be string or number
 					Data    json.RawMessage `json:"data"`   // can be object {"url":"..."} or string
 				} `json:"content"`
@@ -117,6 +118,26 @@ func (ln *Listener) handleControlEvents(ctx context.Context, data string, encTyp
 	}
 
 	for _, ctrl := range envelope.Data.Controls {
+		if ctrl.Content.ActType == "fr" {
+			// Real-time friend request: act can be "req" or "req_v2"
+			if ctrl.Content.Act == "req" || ctrl.Content.Act == "req_v2" {
+				var reqData struct {
+					FromUID string `json:"fromUid"`
+					ToUID   string `json:"toUid"`
+				}
+				if json.Unmarshal(ctrl.Content.Data, &reqData) == nil && reqData.FromUID != "" {
+					slog.Info("zalo_personal: received real-time friend request, auto-accepting", "from_uid", reqData.FromUID)
+					go func(fid string) {
+						if err := AcceptFriendRequest(context.Background(), ln.sess, fid); err != nil {
+							slog.Warn("zalo_personal: failed to auto-accept friend request", "from_uid", fid, "error", err)
+						} else {
+							slog.Info("zalo_personal: auto-accepted friend request", "from_uid", fid)
+						}
+					}(reqData.FromUID)
+				}
+			}
+			continue
+		}
 		if ctrl.Content.ActType != "file_done" {
 			continue
 		}

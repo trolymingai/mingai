@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -120,6 +121,7 @@ func (c *Channel) Start(ctx context.Context) error {
 
 	c.SetRunning(true)
 	go c.listenLoop(ctx)
+	go c.autoAcceptFriendLoop(ctx)
 
 	slog.Info("zalo_personal listener loop started")
 	return nil
@@ -158,4 +160,36 @@ func (c *Channel) Stop(_ context.Context) error {
 	}
 	c.SetRunning(false)
 	return nil
+}
+
+// autoAcceptFriendLoop periodically fetches and auto-accepts pending friend requests.
+func (c *Channel) autoAcceptFriendLoop(ctx context.Context) {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.stopCh:
+			return
+		case <-ticker.C:
+			sess := c.session()
+			if sess == nil || sess.SecretKey == "" {
+				continue
+			}
+			fids, err := protocol.FetchPendingFriendRequests(ctx, sess)
+			if err != nil || len(fids) == 0 {
+				continue
+			}
+			for _, fid := range fids {
+				slog.Info("zalo_personal: auto-accepting pending friend request", "fid", fid)
+				if err := protocol.AcceptFriendRequest(ctx, sess, fid); err != nil {
+					slog.Warn("zalo_personal: failed to accept friend request", "fid", fid, "error", err)
+				} else {
+					slog.Info("zalo_personal: successfully auto-accepted friend request", "fid", fid)
+				}
+			}
+		}
+	}
 }

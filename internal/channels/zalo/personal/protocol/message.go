@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -17,7 +18,8 @@ type Message interface {
 
 // TMessage is the raw JSON message payload from Zalo WebSocket.
 type TMessage struct {
-	MsgID   string  `json:"msgId"`
+	MsgID    string  `json:"msgId"`
+	CliMsgID any     `json:"cliMsgId,omitempty"`
 	UIDFrom string  `json:"uidFrom"`
 	IDTo    string  `json:"idTo"`
 	DName   string  `json:"dName"`
@@ -191,3 +193,22 @@ func NewGroupMessage(selfUID string, data TGroupMessage) GroupMessage {
 func (m GroupMessage) Type() ThreadType { return ThreadTypeGroup }
 func (m GroupMessage) ThreadID() string { return m.threadID }
 func (m GroupMessage) IsSelf() bool     { return m.isSelf }
+
+// GetCliMsgID returns cliMsgId as string.
+func (m *TMessage) GetCliMsgID() string {
+	if m.CliMsgID == nil {
+		return ""
+	}
+	switch v := m.CliMsgID.(type) {
+	case string:
+		return v
+	case float64:
+		return fmt.Sprintf("%.0f", v)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case json.Number:
+		return v.String()
+	default:
+		return fmt.Sprint(v)
+	}
+}

@@ -273,3 +273,110 @@ func decryptDataField(sess *Session, data string) ([]byte, error) {
 	}
 	return inner.Data, nil
 }
+
+// FetchPendingFriendRequests fetches pending friend requests received by this account.
+func FetchPendingFriendRequests(ctx context.Context, sess *Session) ([]string, error) {
+	baseURL := getServiceURL(sess, "friend")
+	if baseURL == "" {
+		baseURL = getServiceURL(sess, "profile")
+	}
+	if baseURL == "" {
+		return nil, fmt.Errorf("zalo_personal: no friend/profile service URL")
+	}
+
+	payload := map[string]any{
+		"imei": sess.IMEI,
+	}
+
+	encData, err := encryptPayload(sess, payload)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt friend requests payload: %w", err)
+	}
+
+	reqURL := makeURL(sess, baseURL+"/api/friend/requested/list",
+		map[string]any{"params": encData}, true)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	setDefaultHeaders(req, sess)
+
+	resp, err := sess.Client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch friend requests: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var envelope Response[*string]
+	if err := readJSON(resp, &envelope); err != nil {
+		return nil, fmt.Errorf("parse friend requests response: %w", err)
+	}
+	if envelope.ErrorCode == 112 || (envelope.ErrorCode == 0 && envelope.Data == nil) {
+		return nil, nil
+	}
+	if envelope.ErrorCode != 0 {
+		return nil, fmt.Errorf("friend requests error %d: %s", envelope.ErrorCode, envelope.ErrorMessage)
+	}
+
+	plain, err := decryptDataField(sess, *envelope.Data)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt friend requests: %w", err)
+	}
+
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(plain, &rawMap); err != nil {
+		return nil, fmt.Errorf("unmarshal friend requests map: %w", err)
+	}
+
+	var userIDs []string
+	for uid := range rawMap {
+		userIDs = append(userIDs, uid)
+	}
+	return userIDs, nil
+}
+
+// AcceptFriendRequest accepts a friend request from user friendID.
+func AcceptFriendRequest(ctx context.Context, sess *Session, friendID string) error {
+	baseURL := getServiceURL(sess, "friend")
+	if baseURL == "" {
+		baseURL = getServiceURL(sess, "profile")
+	}
+	if baseURL == "" {
+		return fmt.Errorf("zalo_personal: no friend/profile service URL")
+	}
+
+	payload := map[string]any{
+		"fid":      friendID,
+		"language": "vi",
+	}
+
+	encData, err := encryptPayload(sess, payload)
+	if err != nil {
+		return fmt.Errorf("encrypt accept friend payload: %w", err)
+	}
+
+	reqURL := makeURL(sess, baseURL+"/api/friend/accept", nil, true)
+	form := buildFormBody(map[string]string{"params": encData})
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, form)
+	if err != nil {
+		return err
+	}
+	setDefaultHeaders(req, sess)
+
+	resp, err := sess.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("accept friend request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var envelope Response[any]
+	if err := readJSON(resp, &envelope); err != nil {
+		return fmt.Errorf("parse accept friend response: %w", err)
+	}
+	if envelope.ErrorCode != 0 {
+		return fmt.Errorf("accept friend error %d: %s", envelope.ErrorCode, envelope.ErrorMessage)
+	}
+	return nil
+}
