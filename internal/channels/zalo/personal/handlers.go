@@ -166,8 +166,14 @@ func (c *Channel) handleGroupMessage(msg protocol.GroupMessage) {
 		"preview", channels.Truncate(content, 50),
 	)
 
-	// Step 3: flush pending history + annotate current message with sender name.
-	annotated := fmt.Sprintf("[From: %s]\n%s", senderName, content)
+	// Step 3: flush pending history + annotate current message with group name and sender name.
+	groupName := c.GetGroupName(ctx, threadID)
+	var annotated string
+	if groupName != "" {
+		annotated = fmt.Sprintf("[Nhóm: %s | Người gửi: %s]\n%s", groupName, senderName, content)
+	} else {
+		annotated = fmt.Sprintf("[From: %s]\n%s", senderName, content)
+	}
 	finalContent := annotated
 	if c.HistoryLimit() > 0 {
 		finalContent = c.GroupHistory().BuildContext(threadID, annotated, c.HistoryLimit())
@@ -189,6 +195,7 @@ func (c *Channel) handleGroupMessage(msg protocol.GroupMessage) {
 		"message_id":   msg.Data.MsgID,
 		"platform":     channels.TypeZaloPersonal,
 		"group_id":     threadID,
+		"group_name":   groupName,
 		"display_name": channels.SanitizeDisplayName(senderName),
 	}
 	c.HandleMessage(senderID, threadID, finalContent, allMedia, metadata, "group")

@@ -51,23 +51,42 @@ def find_project_id(identifier):
     except ValueError:
         pass
     
-    clean_id = identifier.upper().strip()
-    proj_map = {
-        "A3": "Vận Hành - Ming A3 (Liên Hương)",
-        "MING-A3": "Vận Hành - Ming A3 (Liên Hương)",
-        "MING A3": "Vận Hành - Ming A3 (Liên Hương)",
-        "LH": "Vận Hành - Ming Liên Hương",
-        "MING-LH": "Vận Hành - Ming Liên Hương",
-        "MING LIÊN HƯƠNG": "Vận Hành - Ming Liên Hương",
-        "PR": "Vận Hành - Ming Phan Rí",
-        "MING-PR": "Vận Hành - Ming Phan Rí",
-        "MING PHAN RÍ": "Vận Hành - Ming Phan Rí",
-        "LD": "Vận Hành - GOO-LD",
-        "GOO-LD": "Vận Hành - GOO-LD",
-        "A2": "Vận Hành - GOO-A2",
-        "GOO-A2": "Vận Hành - GOO-A2"
-    }
-    target_name = proj_map.get(clean_id, identifier)
+    raw = str(identifier).strip()
+    clean_id = raw.upper()
+    
+    # Priority mapping table
+    # Matches branch keywords in group names or branch codes
+    rules = [
+        # Phước Thể
+        (["PHƯỚC THỂ", "PHUOC THE", "PT", "GOO-PT", "GOO PT"], "Vận Hành - GOO Phước Thể"),
+        # Ming A3 (Liên Hương)
+        (["A3", "MING A3", "MING-A3"], "Vận Hành - Ming A3 (Liên Hương)"),
+        # Ming Phan Rí
+        (["PHAN RÍ", "PHAN RI", "PR", "MING-PR", "MING PR"], "Vận Hành - Ming Phan Rí"),
+        # GOO Lê Duẩn
+        (["LÊ DUẨN", "LE DUAN", "LD", "GOO-LD", "GOO LD"], "Vận Hành - GOO-LD"),
+        # GOO A2
+        (["A2", "GOO-A2", "GOO A2"], "Vận Hành - GOO-A2"),
+        # Ming Liên Hương
+        (["LIÊN HƯƠNG", "LIEN HUONG", "LH", "MING-LH"], "Vận Hành - Ming Liên Hương"),
+        # Sự cố & Bảo trì
+        (["SỰ CỐ", "SU CO", "BÁO SỰ CỐ", "BẢO TRÌ", "BAO TRI"], "Bảo Trì & Báo Sự Cố Toàn Hệ Thống"),
+        # Bán hàng / Chung
+        (["BÁN HÀNG", "BAN HANG", "CSKH"], "Vận Hành - Toàn Hệ Thống (Chung)"),
+    ]
+    
+    target_name = None
+    for keywords, proj_name in rules:
+        for kw in keywords:
+            if kw in clean_id:
+                target_name = proj_name
+                break
+        if target_name:
+            break
+            
+    if not target_name:
+        target_name = raw
+
     projects = models.execute_kw(
         ODOO_DB, ODOO_UID, ODOO_API_KEY,
         "project.project", "search_read",
@@ -618,6 +637,52 @@ def search_employee(query):
     )
     print(json.dumps({"status": "success", "count": len(employees), "data": employees}, ensure_ascii=False, indent=2))
 
+
+def add_recognition(employee_name, reason, tag="Tuyên dương"):
+    """
+    Ghi nhận hành động tích cực / tuyên dương / điểm cộng vào Chatter hồ sơ nhân sự trên Odoo ERP.
+    """
+    emp = find_employee(employee_name)
+    if not emp:
+        print(json.dumps({
+            "status": "error",
+            "message": f"Không tìm thấy nhân viên '{employee_name}' trên hệ thống Odoo để ghi nhận. Vui lòng kiểm tra lại họ tên hoặc tạo hồ sơ nhân viên trước."
+        }, ensure_ascii=False, indent=2))
+        return
+
+    models = get_models()
+    now_vn = get_vn_time()
+    dept = emp.get("department") or "Ming Coffee"
+    chatter_body = f"""
+    🌟 <b>[ĐIỂM CỘNG - TUYÊN DƯƠNG CA LÀM VIỆC]</b><br/>
+    - <b>Nhân sự:</b> {emp['name']}<br/>
+    - <b>Chi nhánh:</b> {dept}<br/>
+    - <b>Phân loại:</b> {tag}<br/>
+    - <b>Hành động ghi nhận:</b> {reason}<br/>
+    - <b>Thời gian ghi nhận:</b> {now_vn}<br/>
+    - <b>Người ghi nhận:</b> Ban Điều Hành / CEO
+    """
+    try:
+        msg_id = models.execute_kw(
+            ODOO_DB, ODOO_UID, ODOO_API_KEY,
+            "hr.employee", "message_post",
+            [[emp["id"]]],
+            {"body": chatter_body, "message_type": "comment", "subtype_xmlid": "mail.mt_comment"}
+        )
+        print(json.dumps({
+            "status": "success",
+            "employee_id": emp["id"],
+            "employee_name": emp["name"],
+            "department": dept,
+            "message_id": msg_id,
+            "message": f"Đã cập nhật điểm cộng và tuyên dương vào hồ sơ nhân sự của {emp['name']} trên hệ thống Odoo thành công."
+        }, ensure_ascii=False, indent=2))
+    except Exception as e:
+        print(json.dumps({
+            "status": "error",
+            "message": f"Lỗi khi gửi ghi nhận lên Odoo: {str(e)}"
+        }, ensure_ascii=False, indent=2))
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: odoo_cli <command> [args...]")
@@ -633,6 +698,7 @@ if __name__ == "__main__":
         print("  get_staff_tasks <employee>")
         print("  onboard_employee <name> <phone> <email> <branch> [schedule]")
         print("  search_employee <query>")
+        print("  add_recognition <employee> <reason> [tag]")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -686,6 +752,12 @@ if __name__ == "__main__":
             sys.exit(1)
         sched = sys.argv[6] if len(sys.argv) > 6 else ""
         onboard_employee(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sched)
+    elif cmd == "add_recognition":
+        if len(sys.argv) < 4:
+            print("Error: add_recognition requires <employee> <reason> [tag]")
+            sys.exit(1)
+        tag = sys.argv[4] if len(sys.argv) > 4 else "Tuyên dương"
+        add_recognition(sys.argv[2], sys.argv[3], tag)
     elif cmd == "search_employee":
         if len(sys.argv) < 3:
             print("Error: search_employee requires <query>")

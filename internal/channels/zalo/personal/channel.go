@@ -28,6 +28,8 @@ type Channel struct {
 	sess     *protocol.Session
 	listener *protocol.Listener
 
+	groupNames sync.Map // threadID string -> groupName string
+
 	// Pre-loaded credentials (from DB or from file/QR as fallback).
 	preloadedCreds *protocol.Credentials
 
@@ -122,9 +124,59 @@ func (c *Channel) Start(ctx context.Context) error {
 	c.SetRunning(true)
 	go c.listenLoop(ctx)
 	go c.autoAcceptFriendLoop(ctx)
+	go c.LoadGroupNames(ctx)
+	go func() {
+		ticker := time.NewTicker(3 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.stopCh:
+				return
+			case <-ticker.C:
+				c.LoadGroupNames(ctx)
+			}
+		}
+	}()
 
 	slog.Info("zalo_personal listener loop started")
 	return nil
+}
+
+// LoadGroupNames fetches and caches group names from Zalo API.
+func (c *Channel) LoadGroupNames(ctx context.Context) {
+	sess := c.session()
+	if sess == nil {
+		return
+	}
+	groups, err := protocol.FetchGroups(ctx, sess)
+	if err != nil {
+		slog.Warn("zalo_personal: failed to fetch groups for naming", "error", err)
+		return
+	}
+	for _, g := range groups {
+		if g.GroupID != "" && g.Name != "" {
+			c.groupNames.Store(g.GroupID, g.Name)
+			slog.Info("zalo_personal: cached group name", "group_id", g.GroupID, "name", g.Name)
+		}
+	}
+}
+
+// GetGroupName returns the cached friendly group name, or refreshes if missing.
+func (c *Channel) GetGroupName(ctx context.Context, threadID string) string {
+	if val, ok := c.groupNames.Load(threadID); ok {
+		if s, ok := val.(string); ok && s != "" {
+			return s
+		}
+	}
+	c.LoadGroupNames(ctx)
+	if val, ok := c.groupNames.Load(threadID); ok {
+		if s, ok := val.(string); ok && s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // SetPendingCompaction configures LLM-based auto-compaction for pending messages.
