@@ -114,7 +114,32 @@ func (c *Channel) handleGroupMessage(msg protocol.GroupMessage) {
 		return // Do not forward to agent loop, zero text reply
 	}
 
-	// Requirement 4: Detect new member self-introduction in group
+	// Step 2: @mention gating — in group chats, Ming AI MUST ONLY respond when explicitly tagged or mentioned!
+	// We check both official Zalo mention tag (m.UID == botUID) and plaintext tag (@Ming, @Troly Ming, etc.)
+	wasMentioned := c.checkBotMentioned(msg.Data.Mentions) || isBotMentionedInText(content)
+	if c.RequireMention() && !wasMentioned {
+		c.GroupHistory().Record(threadID, channels.HistoryEntry{
+			Sender:    senderName,
+			SenderID:  senderID,
+			Body:      content,
+			Media:     media,
+			Timestamp: time.Now(),
+			MessageID: msg.Data.MsgID,
+		}, c.HistoryLimit())
+
+		// Collect contact even when bot is not mentioned (cache prevents DB spam).
+		if cc := c.ContactCollector(); cc != nil {
+			cc.EnsureContact(ctx, c.Type(), c.Name(), senderID, senderID, senderName, "", "group", "user", "", "")
+		}
+
+		slog.Debug("zalo_personal group message recorded (no mention)",
+			"group_id", threadID,
+			"sender", senderName,
+		)
+		return
+	}
+
+	// Requirement 4: Detect new member self-introduction in group (only applied when bot is mentioned/tagged)
 	lowerContent := strings.ToLower(content)
 	isIntro := false
 	introKeywords := []string{
@@ -132,32 +157,6 @@ func (c *Channel) handleGroupMessage(msg protocol.GroupMessage) {
 	}
 	if isIntro {
 		content = "[THÀNH VIÊN MỚI GIỚI THIỆU BẢN THÂN]\n" + content + "\n\n(Chỉ dẫn Ming AI: Hãy gửi lời chào đón ấm áp, chân thành gia nhập đại gia đình Ming Coffee, lan tỏa giá trị cốt lõi Tử Tế & Chú Tâm, và hướng dẫn họ: 'Để làm việc, giao việc, kiểm tra checklist hoặc tra cứu quy trình, bạn chỉ cần tag @Ming AI trong nhóm hoặc nhắn tin riêng cho Ming nhé!')"
-	}
-
-	// Step 2: @mention gating — record non-mentioned messages in history and return.
-	if c.RequireMention() {
-		wasMentioned := c.checkBotMentioned(msg.Data.Mentions)
-		if !wasMentioned {
-			c.GroupHistory().Record(threadID, channels.HistoryEntry{
-				Sender:    senderName,
-				SenderID:  senderID,
-				Body:      content,
-				Media:     media,
-				Timestamp: time.Now(),
-				MessageID: msg.Data.MsgID,
-			}, c.HistoryLimit())
-
-			// Collect contact even when bot is not mentioned (cache prevents DB spam).
-			if cc := c.ContactCollector(); cc != nil {
-				cc.EnsureContact(ctx, c.Type(), c.Name(), senderID, senderID, senderName, "", "group", "user", "", "")
-			}
-
-			slog.Debug("zalo_personal group message recorded (no mention)",
-				"group_id", threadID,
-				"sender", senderName,
-			)
-			return
-		}
 	}
 
 	slog.Debug("zalo_personal group message received",
@@ -352,4 +351,26 @@ func isOnlyEmojiOrSticker(text string) bool {
 		}
 	}
 	return hasRune
+}
+
+// isBotMentionedInText checks if the bot is explicitly tagged or mentioned in the message text.
+// Requires explicit '@' prefix or targeted bot summon phrase.
+func isBotMentionedInText(content string) bool {
+	lower := strings.ToLower(content)
+	tagKeywords := []string{
+		"@ming",
+		"@troly ming",
+		"@trợ lý ming",
+		"@trolyming",
+		"@trợlýming",
+		"@troly",
+		"@trợ lý",
+		"@bot",
+	}
+	for _, kw := range tagKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
 }
