@@ -565,7 +565,12 @@ def onboard_employee(name, phone, email, branch_code, work_schedule=""):
         "LD": "GOO-LD",
         "GOO-LD": "GOO-LD",
         "A2": "GOO-A2",
-        "GOO-A2": "GOO-A2"
+        "GOO-A2": "GOO-A2",
+        "PT": "Chi nhánh GOO Phước Thể",
+        "GOO-PT": "Chi nhánh GOO Phước Thể",
+        "GOO PT": "Chi nhánh GOO Phước Thể",
+        "PHƯỚC THỂ": "Chi nhánh GOO Phước Thể",
+        "PHUOC THE": "Chi nhánh GOO Phước Thể"
     }
     target_dept_name = dept_map.get(b_clean, branch_code)
     depts = models.execute_kw(
