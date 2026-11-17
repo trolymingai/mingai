@@ -683,6 +683,250 @@ def add_recognition(employee_name, reason, tag="Tuyên dương"):
             "message": f"Lỗi khi gửi ghi nhận lên Odoo: {str(e)}"
         }, ensure_ascii=False, indent=2))
 
+
+def check_shift_compliance(branch, shift_type="open"):
+    """
+    Kiểm tra xem ca làm việc hôm nay của chi nhánh đã hoàn tất checklist và gửi số liệu chưa.
+    shift_type: 'open' (Mở ca 06:30) hoặc 'close' (Đóng ca 22:00).
+    """
+    models = get_models()
+    pid = find_project_id(branch)
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    
+    title_keyword = "Mở Ca" if str(shift_type).lower() in ["open", "mở ca", "mo_ca", "sang"] else "Đóng Ca"
+    
+    tasks = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "project.task", "search_read",
+        [[["project_id", "=", pid], ["name", "ilike", title_keyword], ["create_date", ">=", today]]],
+        {"fields": ["id", "name", "stage_id", "state", "user_ids", "write_date", "description"], "limit": 1}
+    )
+    
+    if not tasks:
+        print(json.dumps({
+            "status": "missing",
+            "branch": branch,
+            "shift_type": shift_type,
+            "message": f"Chưa có báo cáo checklist {title_keyword} cho chi nhánh {branch} hôm nay ({today})."
+        }, ensure_ascii=False, indent=2))
+        return False
+        
+    t = tasks[0]
+    is_done = t.get("state") == "1_done"
+    print(json.dumps({
+        "status": "completed" if is_done else "in_progress",
+        "task_id": t["id"],
+        "title": t["name"],
+        "branch": branch,
+        "shift_type": shift_type,
+        "is_done": is_done,
+        "assigned_user": t.get("user_ids"),
+        "last_update": t.get("write_date"),
+        "message": f"Checklist {title_keyword} của {branch} hiện đang: {'ĐÃ HOÀN TẤT' if is_done else 'ĐANG XỬ LÝ (CHƯA HOÀN TẤT)'}."
+    }, ensure_ascii=False, indent=2))
+    return is_done
+
+def escalate_shift(branch, shift_type="open", level="1", reason=""):
+    """
+    Kích hoạt ma trận leo thang (Escalation Matrix) cho ca làm việc bị trễ:
+    - Level 1 (Nhắc nhở ca trực - T+15m): Tạo/Ghi chú task Odoo, yêu cầu khẩn cấp nộp số liệu.
+    - Level 2 (Báo động CHT - T+30m): Set Priority=1 (High), Stage=Changes Requested/Warning, ghi cảnh báo đỏ.
+    - Level 3 (Báo động CEO - T+45m): Cắm cờ Anomaly, ghi nhận biên bản vi phạm vận hành lên Odoo.
+    """
+    models = get_models()
+    pid = find_project_id(branch)
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    now_vn = get_vn_time()
+    
+    title_keyword = "Mở Ca" if str(shift_type).lower() in ["open", "mở ca", "mo_ca", "sang"] else "Đóng Ca"
+    task_title = f"Checklist {title_keyword} - {branch} - {today}"
+    
+    tasks = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "project.task", "search_read",
+        [[["project_id", "=", pid], ["name", "ilike", title_keyword], ["create_date", ">=", today]]],
+        {"fields": ["id", "name", "stage_id", "state", "priority"], "limit": 1}
+    )
+    
+    lvl = str(level).strip()
+    tag_name = f"Leo thang Level {lvl}"
+    tag_id = get_or_create_tag(tag_name, color=1 if lvl in ["2", "3"] else 2)
+    
+    if tasks:
+        task_id = tasks[0]["id"]
+    else:
+        new_task = {
+            "name": task_title,
+            "project_id": pid,
+            "stage_id": 1,
+            "state": "01_in_progress",
+            "priority": "1" if lvl in ["2", "3"] else "0",
+            "description": f"<p>Tự động tạo từ ma trận leo thang trễ hạn {title_keyword}.</p>"
+        }
+        task_id = models.execute_kw(ODOO_DB, ODOO_UID, ODOO_API_KEY, "project.task", "create", [new_task])
+        
+    write_vals = {"priority": "1" if lvl in ["2", "3"] else "0"}
+    if tag_id:
+        write_vals["tag_ids"] = [(4, tag_id)]
+    models.execute_kw(ODOO_DB, ODOO_UID, ODOO_API_KEY, "project.task", "write", [[task_id], write_vals])
+    
+    chatter_msg = f"""
+    ⚠️ <b>[CẢNH BÁO LEO THANG VẬN HÀNH - LEVEL {lvl}]</b><br/>
+    - <b>Hạng mục:</b> {task_title}<br/>
+    - <b>Mức độ:</b> Level {lvl} ({'Nhắc nhở ca trực' if lvl == '1' else 'Báo động CHT' if lvl == '2' else 'Báo cáo CEO vi phạm'})<br/>
+    - <b>Lý do:</b> {reason or 'Quá hạn checklist nhưng chưa có số liệu / bằng chứng hoàn tất'}<br/>
+    - <b>Thời gian:</b> {now_vn}
+    """
+    try:
+        models.execute_kw(ODOO_DB, ODOO_UID, ODOO_API_KEY, "project.task", "message_post", [[task_id]], {"body": chatter_msg, "message_type": "comment"})
+    except Exception:
+        pass
+        
+    print(json.dumps({
+        "status": "success",
+        "action": "escalated",
+        "level": lvl,
+        "task_id": task_id,
+        "branch": branch,
+        "message": f"Đã kích hoạt leo thang Level {lvl} thành công cho {branch} trên Odoo ERP."
+    }, ensure_ascii=False, indent=2))
+
+
+def log_hr_pulse(branch, employee_name, pillar, sentiment, content, is_confidential=False):
+    models = get_models()
+    now_vn = get_vn_time()
+    emp = find_employee(employee_name) if employee_name and str(employee_name).lower() != "ẩn danh" else None
+    
+    pillar_map = {
+        "A": "Trục A: Công bằng & Minh bạch (Phân ca / Thưởng phạt / Thông báo)",
+        "B": "Trục B: Hành xử & Lắng nghe (Tôn trọng lúc đông khách / Phản hồi)",
+        "C": "Trục C: Làm gương văn hóa (Đúng hẹn / Nhận lỗi / Chuẩn công thức)",
+        "D": "Trục D: Vận hành & Kèm cặp (Ca trơn tru / Hướng dẫn đào tạo)",
+        "E": "Trục E: Quan hệ đội ngũ (Tương trợ / Hòa nhập / Giải quyết mâu thuẫn)",
+        "T": "Trục T: Cảm nhận & Gắn kết chung"
+    }
+    pillar_desc = pillar_map.get(str(pillar).upper(), pillar)
+    confidential_badge = "🔒 [BẢO MẬT - CHRO & CEO]" if is_confidential else "🌱 [CHIA SẺ NỘI BỘ - HR & CHT]"
+    emp_label = emp["name"] if emp else (employee_name or "Nhân viên ẩn danh")
+    
+    chatter_body = (
+        f"💬 <b>[NHỊP ĐẬP NHÂN SỰ - HR PULSE & GÓC NHÌN BỊ THIẾU]</b><br/>"
+        f"- <b>Chi nhánh:</b> {branch}<br/>"
+        f"- <b>Nhân sự:</b> {emp_label}<br/>"
+        f"- <b>Chủ đề:</b> {pillar_desc}<br/>"
+        f"- <b>Mức độ hài lòng / Đánh giá:</b> {sentiment}<br/>"
+        f"- <b>Góc nhìn / Ý kiến chia sẻ:</b> {content}<br/>"
+        f"- <b>Phân quyền xem:</b> {confidential_badge}<br/>"
+        f"- <b>Thời gian ghi nhận:</b> {now_vn}<br/>"
+        f"- <b>Kênh tiếp nhận:</b> Ming AI (Giám đốc Nhân sự & HRBP)"
+    )
+    
+    logged_target = []
+    if emp:
+        try:
+            models.execute_kw(
+                ODOO_DB, ODOO_UID, ODOO_API_KEY,
+                "hr.employee", "message_post",
+                [[emp["id"]]],
+                {"body": chatter_body, "message_type": "comment", "subtype_xmlid": "mail.mt_comment"}
+            )
+            logged_target.append(f"Hồ sơ nhân viên {emp['name']}")
+        except Exception:
+            pass
+
+    pid = find_project_id(branch)
+    try:
+        tag_id = get_or_create_tag("HR Pulse", color=4)
+        task_data = {
+            "name": f"[HR Insight] {str(pillar_desc)[:25]} - {branch}",
+            "project_id": pid,
+            "description": chatter_body,
+            "tag_ids": [(6, 0, [tag_id])] if tag_id else False
+        }
+        task_id = models.execute_kw(
+            ODOO_DB, ODOO_UID, ODOO_API_KEY,
+            "project.task", "create",
+            [task_data]
+        )
+        logged_target.append(f"Dự án Odoo (Task #{task_id})")
+    except Exception:
+        pass
+
+    print(json.dumps({
+        "status": "success",
+        "branch": branch,
+        "employee": emp_label,
+        "pillar": pillar_desc,
+        "sentiment": sentiment,
+        "logged_to": logged_target,
+        "message": f"Đã ghi nhận góc nhìn nhân sự thành công lên Odoo ERP: {', '.join(logged_target)}."
+    }, ensure_ascii=False, indent=2))
+
+def flag_hr_alert(branch, employee_name, reason, details):
+    models = get_models()
+    now_vn = get_vn_time()
+    pid = find_project_id(branch)
+    tag_id = get_or_create_tag("BÁO ĐỘNG ĐỎ NHÂN SỰ", color=1)
+    
+    alert_body = (
+        f"🚨 <b>[BÁO ĐỘNG ĐỎ NHÂN SỰ - BÁO CÁO MẬT CEO DƯƠNG VƯƠNG MINH]</b><br/>"
+        f"- <b>Chi nhánh:</b> {branch}<br/>"
+        f"- <b>Nhân sự phản ánh:</b> {employee_name}<br/>"
+        f"- <b>Vấn đề nghiêm trọng:</b> {reason}<br/>"
+        f"- <b>Chi tiết sự việc:</b> {details}<br/>"
+        f"- <b>Thời gian:</b> {now_vn}<br/>"
+        f"- <b>Đề xuất xử lý:</b> Giám đốc Nhân sự & CEO can thiệp trực tiếp bảo vệ nhân viên."
+    )
+    try:
+        task_data = {
+            "name": f"🚨 [BÁO ĐỘNG ĐỎ CEO] {reason} - {branch}",
+            "project_id": pid,
+            "priority": "1",
+            "description": alert_body,
+            "tag_ids": [(6, 0, [tag_id])] if tag_id else False
+        }
+        task_id = models.execute_kw(
+            ODOO_DB, ODOO_UID, ODOO_API_KEY,
+            "project.task", "create",
+            [task_data]
+        )
+        print(json.dumps({
+            "status": "success",
+            "task_id": task_id,
+            "branch": branch,
+            "reason": reason,
+            "message": f"Đã cắm cờ báo động đỏ nhân sự #{task_id} thành công lên Odoo ERP và sẵn sàng gửi thông báo khẩn tới CEO."
+        }, ensure_ascii=False, indent=2))
+    except Exception as e:
+        print(json.dumps({
+            "status": "error",
+            "message": f"Lỗi cắm cờ báo động đỏ nhân sự: {str(e)}"
+        }, ensure_ascii=False, indent=2))
+
+def send_monthly_survey(branch="all"):
+    form_url = "https://forms.gle/XGgiUNE3ctf3BaD98"
+    msg_lines = [
+        "🌟 [KHẢO SÁT THÁNG: MÔI TRƯỜNG LÀM VIỆC TẠI CỬA HÀNG - MING COFFEE]",
+        "",
+        "Chào cả nhà mình ơi! ✨",
+        "Hôm nay là ngày 25, thời điểm để toàn thể đội ngũ cùng nhìn lại 1 tháng vừa qua nhằm giúp cửa hàng mình ngày càng ấm áp, công bằng và trơn tru hơn.",
+        "",
+        "Khảo sát này HOÀN TOÀN ẨN DANH (không thu email, không hỏi tên hay ca làm).",
+        "Kết quả dùng để công ty và anh Minh kịp thời hỗ trợ các anh/chị Cửa Hàng Trưởng nâng cao năng lực quản lý và tháo gỡ những khó khăn cho các bạn trong quầy.",
+        "",
+        "👉 Mất khoảng 3 phút, cả nhà cùng vào chia sẻ thật lòng nhé:",
+        form_url,
+        "",
+        "🌱 'Sự thật bạn chia sẻ giúp cửa hàng tốt hơn cho chính bạn và đồng đội. Tử tế từ việc nhỏ nhất là cốt lõi của Ming.'"
+    ]
+    msg = chr(10).join(msg_lines)
+    print(json.dumps({
+        "status": "success",
+        "branch": branch,
+        "form_url": form_url,
+        "message": msg
+    }, ensure_ascii=False, indent=2))
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: odoo_cli <command> [args...]")
@@ -698,6 +942,8 @@ if __name__ == "__main__":
         print("  get_staff_tasks <employee>")
         print("  onboard_employee <name> <phone> <email> <branch> [schedule]")
         print("  search_employee <query>")
+        print("  check_shift_compliance <branch> [shift_type]")
+        print("  escalate_shift <branch> <shift_type> <level> [reason]")
         print("  add_recognition <employee> <reason> [tag]")
         sys.exit(1)
 
@@ -758,11 +1004,39 @@ if __name__ == "__main__":
             sys.exit(1)
         tag = sys.argv[4] if len(sys.argv) > 4 else "Tuyên dương"
         add_recognition(sys.argv[2], sys.argv[3], tag)
+    elif cmd == "check_shift_compliance":
+        if len(sys.argv) < 3:
+            print("Error: check_shift_compliance requires <branch> [shift_type]")
+            sys.exit(1)
+        stype = sys.argv[3] if len(sys.argv) > 3 else "open"
+        check_shift_compliance(sys.argv[2], stype)
+    elif cmd == "escalate_shift":
+        if len(sys.argv) < 5:
+            print("Error: escalate_shift requires <branch> <shift_type> <level> [reason]")
+            sys.exit(1)
+        reason = sys.argv[5] if len(sys.argv) > 5 else ""
+        escalate_shift(sys.argv[2], sys.argv[3], sys.argv[4], reason)
     elif cmd == "search_employee":
         if len(sys.argv) < 3:
             print("Error: search_employee requires <query>")
             sys.exit(1)
         search_employee(sys.argv[2])
+
+    elif cmd == "log_hr_pulse":
+        if len(sys.argv) < 7:
+            print("Error: log_hr_pulse requires <branch> <employee> <pillar> <sentiment> <content> [is_confidential]")
+            sys.exit(1)
+        conf = sys.argv[7].lower() in ['true', '1', 'yes'] if len(sys.argv) > 7 else False
+        log_hr_pulse(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], conf)
+    elif cmd == "flag_hr_alert":
+        if len(sys.argv) < 6:
+            print("Error: flag_hr_alert requires <branch> <employee> <reason> <details>")
+            sys.exit(1)
+        flag_hr_alert(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
+    elif cmd == "send_monthly_survey":
+        br = sys.argv[2] if len(sys.argv) > 2 else "all"
+        send_monthly_survey(br)
+
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)

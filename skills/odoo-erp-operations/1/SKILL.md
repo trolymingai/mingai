@@ -58,3 +58,11 @@ odoo_cli onboard_employee "<Họ tên>" "<Số điện thoại>" "<Email>" "<Chi
   `odoo_cli get_tasks "<Chi nhánh>"`
 - Danh sách chi nhánh:
   `odoo_cli list_branches`
+
+---
+
+## 7. Kiểm Soát Tuân Thủ Vòng Lặp Kín & Ma Trận Leo Thang (Closed-Loop SLA)
+- Kiểm tra trạng thái hoàn thành checklist ca hôm nay:
+  `odoo_cli check_shift_compliance "<Chi nhánh>" "<open / close>"`
+- Kích hoạt ma trận leo thang khi quá hạn:
+  `odoo_cli escalate_shift "<Chi nhánh>" "<open / close>" "<level: 1|2|3>" "<Lý do trễ hạn>"`
