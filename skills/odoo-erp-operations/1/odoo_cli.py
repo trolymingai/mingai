@@ -1054,6 +1054,119 @@ def daily_task_report():
     print(json.dumps({"status": "success", "data": report_data}, ensure_ascii=False, indent=2))
 
 
+def record_uniform_check(branch, shift_type, shift_leader, good_staff_list, violated_staff_list="", notes=""):
+    models = get_models()
+    pid = find_project_id(branch)
+    now_vn = get_vn_time()
+    today_vn = now_vn.split()[0]
+    
+    tag_ok = get_or_create_tag("Đồng phục chuẩn", color=10)
+    tag_violation = get_or_create_tag("Vi phạm tác phong", color=1)
+    
+    clean_viol = str(violated_staff_list or "").strip().lower()
+    has_violation = bool(clean_viol and clean_viol not in ["không", "khong", "none", "0", "ko", "chưa", "chua"])
+    
+    title = f"[Tác phong {shift_type} {today_vn}] {branch}"
+    
+    desc = "<h3>Giám Sát Tác Phong & Đồng Phục Đầu Ca</h3>"
+    desc += "<ul>"
+    desc += f"<li><b>Chi nhánh:</b> {branch}</li>"
+    desc += f"<li><b>Ca làm việc:</b> {shift_type}</li>"
+    desc += f"<li><b>Ca trưởng / CHT giám sát:</b> {shift_leader}</li>"
+    desc += f"<li><b>Thời gian kiểm tra:</b> {now_vn}</li>"
+    desc += f"<li><b>Nhân sự chuẩn chỉnh (Đạt):</b> <span style='color: green;'>{good_staff_list or 'Toàn ca'}</span></li>"
+    viol_txt = violated_staff_list if has_violation else 'Không có (100% đạt chuẩn)'
+    desc += f"<li><b>Nhân sự chưa đạt / vi phạm:</b> <span style='color: red;'>{viol_txt}</span></li>"
+    desc += "</ul>"
+    if notes:
+        desc += f"<p><b>Ghi chú hỗ trợ / xử lý tại chỗ:</b> {notes}</p>"
+        
+    tag_ids = [tag_ok] if not has_violation else [tag_violation]
+    
+    vals = {
+        "name": title,
+        "project_id": pid,
+        "stage_id": 6 if not has_violation else 1,
+        "state": "1_done" if not has_violation else "01_in_progress",
+        "priority": "0" if not has_violation else "1",
+        "description": desc,
+        "tag_ids": [(4, tid) for tid in tag_ids if tid]
+    }
+    
+    task_id = models.execute_kw(ODOO_DB, ODOO_UID, ODOO_API_KEY, "project.task", "create", [vals])
+    
+    chatter = "👔 <b>Báo cáo tác phong đồng phục đầu ca</b><br/>"
+    chatter += f"- Ca trưởng: <b>{shift_leader}</b><br/>"
+    chatter += f"- Đạt chuẩn: {good_staff_list or '100% ca'}<br/>"
+    if has_violation:
+        chatter += f"- ⚠️ Vi phạm: <b>{violated_staff_list}</b> (Đã nhắc nhở)<br/>"
+    try:
+        models.execute_kw(ODOO_DB, ODOO_UID, ODOO_API_KEY, "project.task", "message_post", [[task_id]], {"body": chatter, "message_type": "comment"})
+    except Exception:
+        pass
+        
+    print(json.dumps({
+        "status": "success",
+        "task_id": task_id,
+        "branch": branch,
+        "shift": shift_type,
+        "has_violation": has_violation,
+        "message": f"Đã ghi nhận tác phong ca {shift_type} của {branch} vào Task #{task_id} trên Odoo ERP."
+    }, ensure_ascii=False, indent=2))
+
+
+def uniform_monthly_report(month_str=None):
+    models = get_models()
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    now_vn = now_utc + datetime.timedelta(hours=7)
+    
+    if not month_str:
+        month_start = now_vn.replace(day=1, hour=0, minute=0, second=0).strftime("%Y-%m-%d %H:%M:%S")
+        month_label = now_vn.strftime("%m/%Y")
+    else:
+        m, y = month_str.split('/')
+        month_start = f"{y}-{m}-01 00:00:00"
+        month_label = month_str
+
+    tasks = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "project.task", "search_read",
+        [[["name", "ilike", "[Tác phong"], ["create_date", ">=", month_start]]],
+        {"fields": ["id", "name", "project_id", "tag_ids", "description", "create_date"]}
+    )
+    
+    total_checks = len(tasks)
+    violations = []
+    by_branch = {}
+    
+    for t in tasks:
+        pname = t["project_id"][1] if t["project_id"] else "Chung"
+        if pname not in by_branch:
+            by_branch[pname] = {"total": 0, "violations": 0}
+        by_branch[pname]["total"] += 1
+        
+        desc = t.get("description") or ""
+        if "Vi phạm:" in desc or "chưa đạt / vi phạm:</span> Không có" not in desc:
+            by_branch[pname]["violations"] += 1
+            violations.append({
+                "task_id": t["id"],
+                "branch": pname,
+                "title": t["name"],
+                "date": t["create_date"]
+            })
+            
+    rate = f"{(total_checks - len(violations)) * 100 / total_checks:.1f}%" if total_checks > 0 else "100%"
+    res = {
+        "month": month_label,
+        "total_shifts_checked": total_checks,
+        "total_violations": len(violations),
+        "compliance_rate": rate,
+        "branch_summary": by_branch,
+        "violations": violations
+    }
+    print(json.dumps({"status": "success", "data": res}, ensure_ascii=False, indent=2))
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: odoo_cli <command> [args...]")
@@ -1170,6 +1283,13 @@ if __name__ == "__main__":
         update_task_deadline(sys.argv[2], sys.argv[3], sys.argv[4])
     elif cmd == "daily_task_report":
         daily_task_report()
+    elif cmd == "record_uniform_check":
+        notes = sys.argv[7] if len(sys.argv) > 7 else ""
+        viol = sys.argv[6] if len(sys.argv) > 6 else ""
+        record_uniform_check(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], viol, notes)
+    elif cmd == "uniform_monthly_report":
+        m = sys.argv[2] if len(sys.argv) > 2 else None
+        uniform_monthly_report(m)
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
