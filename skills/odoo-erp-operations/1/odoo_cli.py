@@ -1416,6 +1416,66 @@ def attendance_check_out(emp_identifier, check_out_time=None):
         "worked_hours": hours
     }, ensure_ascii=False, indent=2))
 
+
+def get_daily_hr_pulse_message(branch="Ming Coffee"):
+    now_vn = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=7)
+    weekday = now_vn.weekday()
+    
+    prompts = {
+        0: [
+            "Chào cả nhà ca sáng đầu tuần! ✨",
+            f"Lịch ca tuần mới tại {branch} các bạn thấy CHT sắp xếp đã thuận tiện việc học và việc riêng của mình chưa nè? Có bạn nào bị trùng lịch hay cần hỗ trợ đổi ca cứ nhắn Ming hoặc báo CHT sớm nha!",
+            "",
+            "🌱 'Tử tế và minh bạch từ những điều nhỏ nhất là cốt lõi của Ming.'"
+        ],
+        1: [
+            "Ca trưa nay cả nhà mình thế nào rồi nè? ✨",
+            f"Lúc cao điểm đông khách vừa rồi, quầy {branch} phối hợp nhịp nhàng chứ? Có lúc nào các bạn cảm thấy hơi ngợp hay áp lực ở khâu nào cần CHT hỗ trợ thêm không?",
+            "",
+            "✨ 'Bình tĩnh và tôn trọng nhau trong từng giây phút phục vụ.'"
+        ],
+        2: [
+            "Chào buổi chiều cả nhà mình! ✨",
+            f"Mấy ngày nay các bạn mới onboard tại {branch} đã quen tay với máy pha và quy trình chưa nè? Có thao tác nào còn bỡ ngỡ cần anh/chị CHT hoặc đồng đội chỉ thêm mẹo không, cứ thoải mái chia sẻ nhé!",
+            "",
+            "🌱 'Kèm cặp và cùng nhau tiến bộ mỗi ngày.'"
+        ],
+        3: [
+            "Cả nhà ơi, trưa nay đứng quầy có điều gì vui không nè? ✨",
+            f"Hôm nay bạn có thấy hành động nào của đồng đội hoặc anh/chị CHT tại {branch} khiến bạn thấy ấn tượng, chú tâm và tự hào không? Cùng thả nhẹ 1 lời khen để tiếp thêm năng lượng cho ca chiều nhé!",
+            "",
+            "✨ 'Chú tâm từng việc nhỏ để tạo nên tách cà phê tuyệt hảo.'"
+        ],
+        4: [
+            "Cuối tuần sắp tới rồi cả nhà ơi! ✨",
+            f"Lượng khách cuối tuần sẽ đông hơn, đội ngũ {branch} mình đã chuẩn bị tinh thần và nguyên liệu sẵn sàng 'chiến' chưa? Ca mình cần hỗ trợ hoặc phối hợp thêm điều gì để chạy ca thật trơn tru không nè?",
+            "",
+            "🌱 'Đồng đội là điểm tựa - Cùng nhau vượt qua mọi giờ cao điểm.'"
+        ],
+        5: [
+            "Thứ Bảy vui vẻ nha cả nhà! ✨",
+            f"Hôm nay quán đông, các bạn nhớ uống đủ nước và giữ nụ cười thật tươi nha. Có tình huống khách khó xử nào cần CHT đứng ra hỗ trợ thì nhớ ới CHT ngay nhé!",
+            "",
+            "✨ 'Sự hài lòng của khách hàng bắt đầu từ nụ cười của chính các bạn.'"
+        ],
+        6: [
+            "Chủ Nhật rồi, một tuần làm việc sắp khép lại! ✨",
+            f"Nhìn lại 1 tuần vừa qua đứng quầy tại {branch}, điều gì làm bạn cảm thấy vui nhất hoặc tự hào nhất về ca làm việc của mình?",
+            "",
+            "🌱 'Cảm ơn sự tận tụy và chú tâm của tất cả các bạn trong tuần qua.'"
+        ]
+    }
+    lines = prompts.get(weekday, prompts[0])
+    return chr(10).join(lines)
+
+def send_daily_hr_pulse(branch="Ming Coffee"):
+    msg = get_daily_hr_pulse_message(branch)
+    print(json.dumps({
+        "status": "success",
+        "branch": branch,
+        "message": msg
+    }, ensure_ascii=False, indent=2))
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: odoo_cli <command> [args...]")
@@ -1566,6 +1626,11 @@ if __name__ == "__main__":
             sys.exit(1)
         t = sys.argv[3] if len(sys.argv) > 3 else None
         attendance_check_out(sys.argv[2], t)
+
+    elif cmd == "send_daily_hr_pulse":
+        br = sys.argv[2] if len(sys.argv) > 2 else "Ming Coffee"
+        send_daily_hr_pulse(br)
+
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)

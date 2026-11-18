@@ -79,3 +79,19 @@ Xuất báo cáo tổng hợp tỷ lệ tuân thủ đồng phục cuối tháng
 ```bash
 odoo_cli uniform_monthly_report "[Tháng/Năm, vd: 11/2026]"
 ```
+
+
+---
+
+## 9. Thăm Dò Nhịp Đập Nhân Sự Hàng Ngày (Daily HR Pulse - 14:30)
+Chủ động lấy câu hỏi văn hóa/thăm dò nhịp đập nhân sự theo đúng thứ trong tuần để đăng vào nhóm Zalo:
+```bash
+odoo_cli send_daily_hr_pulse "<Chi nhánh>"
+```
+*Tự động xoay vòng 5 trục khảo sát theo ngày trong tuần:*
+- **Thứ 2 (Trục A):** Công bằng & minh bạch (Lịch ca tuần mới).
+- **Thứ 3 (Trục B):** Hành xử & lắng nghe (Phối hợp giờ cao điểm ca trưa).
+- **Thứ 4 (Trục D):** Kèm cặp & đào tạo (Hỗ trợ bạn mới bỡ ngỡ máy móc).
+- **Thứ 5 (Trục C):** Làm gương & chú tâm (Khơi gợi lời khen/sự chú tâm).
+- **Thứ 6 (Trục E):** Tương trợ đồng đội (Chuẩn bị tinh thần cuối tuần đông khách).
+- **Thứ 7 & CN (Trục T):** Cảm nhận chung & Gắn kết (Lời cảm ơn tuần làm việc).
