@@ -1167,6 +1167,108 @@ def uniform_monthly_report(month_str=None):
     print(json.dumps({"status": "success", "data": res}, ensure_ascii=False, indent=2))
 
 
+
+
+def register_branch_manager(branch_str, manager_name, role="Quản lý", zalo_name="", zalo_uid=""):
+    """
+    Registers or updates the Manager / Store Manager (CHT) for a specific branch.
+    Saves to /opt/goclaw/branch_managers.json and updates Odoo ming.branch if applicable.
+    """
+    import json
+    import os
+    
+    registry_file = "/opt/goclaw/branch_managers.json"
+    data = {}
+    if os.path.exists(registry_file):
+        try:
+            with open(registry_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+            
+    if "branches" not in data:
+        data["branches"] = {}
+        
+    branch_key = branch_str.strip().upper()
+    now_str = get_vn_time()
+    
+    # Try resolving branch on Odoo
+    odoo_branch_id = None
+    odoo_branch_name = branch_str
+    try:
+        models = get_models()
+        branches = models.execute_kw(
+            ODOO_DB, ODOO_UID, ODOO_API_KEY,
+            "ming.branch", "search_read", [[]],
+            {"fields": ["id", "name", "code", "manager_id"]}
+        )
+        for b in branches:
+            b_name = (b.get("name") or "").upper()
+            b_code = (b.get("code") or "").upper()
+            if branch_key in b_name or branch_key in b_code or b_name in branch_key:
+                odoo_branch_id = b["id"]
+                odoo_branch_name = b["name"]
+                break
+                
+        # If branch found, check if manager exists in res.users
+        if odoo_branch_id:
+            users = models.execute_kw(
+                ODOO_DB, ODOO_UID, ODOO_API_KEY,
+                "res.users", "search_read",
+                [[("name", "ilike", manager_name.strip())]],
+                {"fields": ["id", "name"], "limit": 1}
+            )
+            if users:
+                user_id = users[0]["id"]
+                models.execute_kw(
+                    ODOO_DB, ODOO_UID, ODOO_API_KEY,
+                    "ming.branch", "write",
+                    [[odoo_branch_id], {"manager_id": user_id}]
+                )
+    except Exception as e:
+        pass
+
+    record = {
+        "branch_input": branch_str,
+        "branch_name": odoo_branch_name,
+        "odoo_branch_id": odoo_branch_id,
+        "manager_name": manager_name.strip(),
+        "role": role.strip(),
+        "zalo_name": zalo_name.strip(),
+        "zalo_uid": str(zalo_uid).strip() if zalo_uid else "",
+        "updated_at": now_str
+    }
+    
+    data["branches"][branch_key] = record
+    if odoo_branch_name != branch_key:
+        data["branches"][odoo_branch_name.upper()] = record
+        
+    with open(registry_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        
+    print(json.dumps({
+        "status": "success",
+        "message": f"Đã ghi nhận thành công {manager_name} là {role} tại chi nhánh {odoo_branch_name}",
+        "data": record
+    }, ensure_ascii=False, indent=2))
+
+def get_branch_managers():
+    """
+    Returns all registered branch managers.
+    """
+    import json
+    import os
+    registry_file = "/opt/goclaw/branch_managers.json"
+    if os.path.exists(registry_file):
+        try:
+            with open(registry_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            print(json.dumps({"status": "success", "data": data.get("branches", {})}, ensure_ascii=False, indent=2))
+            return
+        except Exception as e:
+            pass
+    print(json.dumps({"status": "success", "data": {}}, ensure_ascii=False, indent=2))
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: odoo_cli <command> [args...]")
@@ -1290,6 +1392,16 @@ if __name__ == "__main__":
     elif cmd == "uniform_monthly_report":
         m = sys.argv[2] if len(sys.argv) > 2 else None
         uniform_monthly_report(m)
+    elif cmd == "register_branch_manager":
+        if len(sys.argv) < 4:
+            print("Error: register_branch_manager requires <branch> <name> [role] [zalo_name] [zalo_uid]")
+            sys.exit(1)
+        r = sys.argv[4] if len(sys.argv) > 4 else "Quản lý"
+        zn = sys.argv[5] if len(sys.argv) > 5 else ""
+        zu = sys.argv[6] if len(sys.argv) > 6 else ""
+        register_branch_manager(sys.argv[2], sys.argv[3], r, zn, zu)
+    elif cmd == "get_branch_managers":
+        get_branch_managers()
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
