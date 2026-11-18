@@ -1007,6 +1007,53 @@ def update_task_deadline(task_id, new_deadline_str, reason=""):
     
     print(json.dumps({"status": "success", "reminder_at_ms": reminder_at_ms}, ensure_ascii=False, indent=2))
 
+def daily_task_report():
+    models = get_models()
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    now_vn = now_utc + datetime.timedelta(hours=7)
+    today_str = now_vn.strftime("%d/%m/%Y")
+    today_start_vn = now_vn.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = today_start_vn - datetime.timedelta(hours=7)
+    today_start_str = today_start_utc.strftime("%Y-%m-%d %H:%M:%S")
+
+    tasks = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "project.task", "search_read",
+        [["|",
+          ["create_date", ">=", today_start_str],
+          ["state", "in", ["01_in_progress", "02_changes_requested"]]
+        ]],
+        {"fields": ["id", "name", "project_id", "stage_id", "state", "create_date", "user_ids", "date_deadline"]}
+    )
+    
+    by_project = {}
+    completed_count = 0
+    in_progress_count = 0
+    for t in tasks:
+        pname = t["project_id"][1] if t["project_id"] else "Chung"
+        if pname not in by_project:
+            by_project[pname] = []
+        is_done = t.get("state") in ["1_done", "done"] or (t.get("stage_id") and "Hoàn tất" in t["stage_id"][1])
+        if is_done:
+            completed_count += 1
+        else:
+            in_progress_count += 1
+        by_project[pname].append({
+            "id": t["id"],
+            "name": t["name"],
+            "state": "DONE" if is_done else "IN_PROGRESS"
+        })
+
+    report_data = {
+        "date": today_str,
+        "total_active": len(tasks),
+        "completed": completed_count,
+        "in_progress": in_progress_count,
+        "branches": by_project
+    }
+    print(json.dumps({"status": "success", "data": report_data}, ensure_ascii=False, indent=2))
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: odoo_cli <command> [args...]")
@@ -1121,6 +1168,8 @@ if __name__ == "__main__":
         create_delegated_task(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7])
     elif cmd == "update_task_deadline":
         update_task_deadline(sys.argv[2], sys.argv[3], sys.argv[4])
+    elif cmd == "daily_task_report":
+        daily_task_report()
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
