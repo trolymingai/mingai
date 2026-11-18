@@ -122,6 +122,14 @@ def get_or_create_tag(tag_name, color=1):
     except Exception:
         return None
 
+
+def remove_accents(input_str):
+    if not input_str:
+        return ""
+    import unicodedata
+    nfkd = unicodedata.normalize('NFKD', str(input_str))
+    return ''.join([c for c in nfkd if not unicodedata.combining(c)]).replace('đ', 'd').replace('Đ', 'D').lower().strip()
+
 def find_employee(emp_identifier):
     if not emp_identifier:
         return None
@@ -152,8 +160,33 @@ def find_employee(emp_identifier):
             "name": emp["name"],
             "phone": phone,
             "email": emp["work_email"] or "",
-            "department": dept
+            "department": dept,
+            "job_title": emp.get("job_title")
         }
+
+    # Fallback: unaccented fuzzy matching across all active employees
+    clean_q = remove_accents(query)
+    all_emps = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "hr.employee", "search_read",
+        [[("active", "=", True)]],
+        {"fields": ["id", "name", "work_phone", "mobile_phone", "work_email", "user_id", "department_id", "job_title"]}
+    )
+    for emp in all_emps:
+        emp_clean = remove_accents(emp.get("name") or "")
+        if clean_q == emp_clean or (len(clean_q) >= 4 and (clean_q in emp_clean or emp_clean in clean_q)):
+            user_id = emp["user_id"][0] if emp.get("user_id") else None
+            phone = emp.get("work_phone") or emp.get("mobile_phone") or ""
+            dept = emp["department_id"][1] if emp.get("department_id") else ""
+            return {
+                "id": emp["id"],
+                "user_id": user_id,
+                "name": emp["name"],
+                "phone": phone,
+                "email": emp.get("work_email") or "",
+                "department": dept,
+                "job_title": emp.get("job_title")
+            }
     return None
 
 def get_tasks(project_id_or_name=None):
