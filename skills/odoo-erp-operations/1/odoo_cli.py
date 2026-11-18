@@ -1599,7 +1599,7 @@ def get_daily_shift_summary(branch="all", date_str=None):
 
     for t in tasks:
         pname = t["project_id"][1] if t.get("project_id") else "Chung"
-        users = [u[1] for u in t.get("user_ids", [])] if t.get("user_ids") else ["Chưa gán"]
+        users = [str(u) for u in t.get("user_ids", [])] if t.get("user_ids") else ["Chưa gán"]
         item = {
             "id": t["id"],
             "title": t["name"],
