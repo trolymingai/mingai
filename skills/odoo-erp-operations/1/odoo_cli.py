@@ -1269,6 +1269,153 @@ def get_branch_managers():
             pass
     print(json.dumps({"status": "success", "data": {}}, ensure_ascii=False, indent=2))
 
+
+
+def get_branch_roster(branch_str):
+    """
+    Returns list of employees assigned to a specific branch/department.
+    """
+    import json
+    models = get_models()
+    clean_b = branch_str.strip().upper()
+    
+    # Search department
+    depts = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "hr.department", "search_read", [[]],
+        {"fields": ["id", "name"]}
+    )
+    target_dept_id = None
+    target_dept_name = ""
+    for d in depts:
+        d_name = d["name"].upper()
+        if clean_b in d_name or any(k in d_name for k in clean_b.split()):
+            target_dept_id = d["id"]
+            target_dept_name = d["name"]
+            break
+            
+    domain = []
+    if target_dept_id:
+        domain = [("department_id", "=", target_dept_id)]
+    else:
+        domain = [("name", "ilike", branch_str)]
+        
+    emps = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "hr.employee", "search_read",
+        [domain],
+        {"fields": ["id", "name", "job_title", "work_email", "work_phone", "department_id", "user_id"]}
+    )
+    print(json.dumps({
+        "status": "success",
+        "branch": target_dept_name or branch_str,
+        "total_employees": len(emps),
+        "data": emps
+    }, ensure_ascii=False, indent=2))
+
+def attendance_check_in(emp_identifier, check_in_time=None):
+    """
+    Records Check-in for an employee in hr.attendance on Odoo.
+    """
+    import json
+    models = get_models()
+    emp_info = find_employee(emp_identifier)
+    if not emp_info:
+        print(json.dumps({"status": "error", "message": f"Không tìm thấy nhân viên: {emp_identifier}"}, ensure_ascii=False))
+        return
+        
+    now_vn = check_in_time or get_vn_time()
+    # Check if already checked in without checkout
+    existing = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "hr.attendance", "search_read",
+        [[("employee_id", "=", emp_info["id"]), ("check_out", "=", False)]],
+        {"fields": ["id", "check_in"], "limit": 1}
+    )
+    if existing:
+        print(json.dumps({
+            "status": "warning",
+            "message": f"Nhân sự {emp_info['name']} đã check-in trước đó lúc {existing[0]['check_in']}",
+            "attendance_id": existing[0]["id"]
+        }, ensure_ascii=False, indent=2))
+        return
+
+    # Odoo datetime expects UTC
+    # Local VN is UTC+7, so convert to UTC for Odoo storage
+    dt_local = datetime.datetime.strptime(now_vn, "%Y-%m-%d %H:%M:%S")
+    dt_utc = dt_local - datetime.timedelta(hours=7)
+    utc_str = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
+
+    att_id = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "hr.attendance", "create",
+        [{
+            "employee_id": emp_info["id"],
+            "check_in": utc_str
+        }]
+    )
+    print(json.dumps({
+        "status": "success",
+        "message": f"Đã ghi nhận Check-in cho {emp_info['name']} lúc {now_vn}",
+        "attendance_id": att_id,
+        "employee": emp_info["name"],
+        "check_in": now_vn
+    }, ensure_ascii=False, indent=2))
+
+def attendance_check_out(emp_identifier, check_out_time=None):
+    """
+    Records Check-out for an employee in hr.attendance on Odoo.
+    """
+    import json
+    models = get_models()
+    emp_info = find_employee(emp_identifier)
+    if not emp_info:
+        print(json.dumps({"status": "error", "message": f"Không tìm thấy nhân viên: {emp_identifier}"}, ensure_ascii=False))
+        return
+        
+    now_vn = check_out_time or get_vn_time()
+    # Find active check-in
+    existing = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "hr.attendance", "search_read",
+        [[("employee_id", "=", emp_info["id"]), ("check_out", "=", False)]],
+        {"fields": ["id", "check_in"], "limit": 1}
+    )
+    if not existing:
+        print(json.dumps({
+            "status": "error",
+            "message": f"Không tìm thấy lượt Check-in đang mở cho {emp_info['name']}"
+        }, ensure_ascii=False, indent=2))
+        return
+
+    dt_local = datetime.datetime.strptime(now_vn, "%Y-%m-%d %H:%M:%S")
+    dt_utc = dt_local - datetime.timedelta(hours=7)
+    utc_str = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
+
+    att_id = existing[0]["id"]
+    models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "hr.attendance", "write",
+        [[att_id], {"check_out": utc_str}]
+    )
+    
+    # Read back worked_hours
+    updated = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "hr.attendance", "read",
+        [[att_id]],
+        {"fields": ["worked_hours", "check_in", "check_out"]}
+    )
+    hours = updated[0].get("worked_hours", 0) if updated else 0
+    print(json.dumps({
+        "status": "success",
+        "message": f"Đã ghi nhận Check-out cho {emp_info['name']} lúc {now_vn}. Tổng giờ làm: {hours:.2f} giờ",
+        "attendance_id": att_id,
+        "employee": emp_info["name"],
+        "check_out": now_vn,
+        "worked_hours": hours
+    }, ensure_ascii=False, indent=2))
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: odoo_cli <command> [args...]")
@@ -1402,6 +1549,23 @@ if __name__ == "__main__":
         register_branch_manager(sys.argv[2], sys.argv[3], r, zn, zu)
     elif cmd == "get_branch_managers":
         get_branch_managers()
+    elif cmd == "get_branch_roster":
+        if len(sys.argv) < 3:
+            print("Error: get_branch_roster requires <branch>")
+            sys.exit(1)
+        get_branch_roster(sys.argv[2])
+    elif cmd == "check_in":
+        if len(sys.argv) < 3:
+            print("Error: check_in requires <employee> [time]")
+            sys.exit(1)
+        t = sys.argv[3] if len(sys.argv) > 3 else None
+        attendance_check_in(sys.argv[2], t)
+    elif cmd == "check_out":
+        if len(sys.argv) < 3:
+            print("Error: check_out requires <employee> [time]")
+            sys.exit(1)
+        t = sys.argv[3] if len(sys.argv) > 3 else None
+        attendance_check_out(sys.argv[2], t)
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
