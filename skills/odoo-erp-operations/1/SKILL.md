@@ -66,3 +66,16 @@ odoo_cli onboard_employee "<Họ tên>" "<Số điện thoại>" "<Email>" "<Chi
   `odoo_cli check_shift_compliance "<Chi nhánh>" "<open / close>"`
 - Kích hoạt ma trận leo thang khi quá hạn:
   `odoo_cli escalate_shift "<Chi nhánh>" "<open / close>" "<level: 1|2|3>" "<Lý do trễ hạn>"`
+
+
+## 8. Giám Sát Tác Phong & Đồng Phục Đầu Ca (CEO Vương Minh Directive)
+Khi Ca trưởng hoặc CHT báo cáo tác phong đồng phục đầu ca vào nhóm Zalo:
+```bash
+odoo_cli record_uniform_check "<Chi nhánh>" "<Ca Sáng | Ca Chiều>" "<Tên Ca trưởng>" "<Danh sách nhân sự đạt>" "<Danh sách vi phạm>" "[Ghi chú hỗ trợ tại chỗ]"
+```
+Tự động tạo Task Odoo, gắn nhãn xanh [Đồng phục chuẩn] hoặc nhãn đỏ [Vi phạm tác phong] để tích lũy dữ liệu đánh giá KPI.
+
+Xuất báo cáo tổng hợp tỷ lệ tuân thủ đồng phục cuối tháng cho CEO:
+```bash
+odoo_cli uniform_monthly_report "[Tháng/Năm, vd: 11/2026]"
+```
