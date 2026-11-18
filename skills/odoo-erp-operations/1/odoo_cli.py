@@ -7,6 +7,7 @@ Fully synchronizes staff checklists and operational tasks to Odoo ERP 19.
 """
 
 import sys
+import re
 import os
 import json
 import datetime
@@ -1634,6 +1635,406 @@ def send_daily_hr_pulse(branch="Ming Coffee"):
         "message": msg
     }, ensure_ascii=False, indent=2))
 
+
+# ==============================================================================
+# HỆ THỐNG QUẢN TRỊ CHECKLIST ĐA NHÂN SỰ TÍCH HỢP ĐO % TIẾN ĐỘ (SHIFT CARD ENGINE)
+# ==============================================================================
+
+ROLE_SOP_TEMPLATES = {
+    "barista": [
+        "Test shot espresso chuẩn 25-30s & ghi nhận thông số (áp suất, gram in/out)",
+        "Kiểm tra hạn date syrup, đào dầm, sữa hạt trên quầy bar",
+        "Xả cặn & vệ sinh họng máy pha, khay nước thải giữa ca",
+        "Bàn giao tồn kho hạt cà phê & nguyên liệu ca sau"
+    ],
+    "pha chế": [
+        "Test shot espresso chuẩn 25-30s & ghi nhận thông số (áp suất, gram in/out)",
+        "Kiểm tra hạn date syrup, đào dầm, sữa hạt trên quầy bar",
+        "Xả cặn & vệ sinh họng máy pha, khay nước thải giữa ca",
+        "Bàn giao tồn kho hạt cà phê & nguyên liệu ca sau"
+    ],
+    "thu ngân": [
+        "Đếm và xác nhận quỹ tiền lẻ đầu ca (500.000đ)",
+        "Đối soát hoá đơn KiotViet & tiền mặt ca làm việc",
+        "In báo cáo chốt ca Z-report & bàn giao két tiền"
+    ],
+    "phục vụ": [
+        "Set up bàn ghế, menu, quạt & kiểm tra vệ sinh khu vực phụ trách",
+        "Kiểm tra vệ sinh khu WC mỗi 2 tiếng (09:00 - 15:00 - 19:00)",
+        "Thu dọn khay ly, lau dọn khu vực bàn ghế cuối ca"
+    ],
+    "tạp vụ": [
+        "Vệ sinh sàn nhà, sảnh đón khách và khu vực rửa ly chén",
+        "Kiểm tra, khử khuẩn và bổ sung giấy lau khu vệ sinh",
+        "Thu gom và đổ rác khu bãi xe, quầy pha chế cuối ca"
+    ],
+    "quản lý": [
+        "Kiểm tra Critical 5 Mở ca (Tủ mát, Áp suất, Đá, Quỹ, Hạt)",
+        "Giám sát tác phong đồng phục và lịch trực ca của nhân sự",
+        "Kiểm soát tồn kho, hao hụt & order nguyên vật liệu bổ sung",
+        "Checklist Đóng ca, két tiền và an toàn cơ sở vật chất"
+    ],
+    "vận hành": [
+        "Kiểm tra Critical 5 Mở ca & vận hành máy móc chi nhánh",
+        "Giám sát tác phong đồng phục và tiến độ checklist nhân sự",
+        "Kiểm tra vệ sinh an toàn thực phẩm & hạn date quầy bar",
+        "Bàn giao ca làm việc & báo cáo sự cố phát sinh (nếu có)"
+    ]
+}
+
+def get_role_checklist(job_title):
+    clean_title = (job_title or "").lower().strip()
+    for role, items in ROLE_SOP_TEMPLATES.items():
+        if role in clean_title:
+            return items
+    return [
+        "Kiểm tra tác phong, công cụ dụng cụ làm việc đầu ca",
+        "Thực hiện các nhiệm vụ chuyên môn theo phân công ca",
+        "Bàn giao công việc và vệ sinh vị trí trước khi rời ca"
+    ]
+
+def get_or_create_staff_shift_card(emp_identifier, branch=None, shift_name=None, custom_items=None):
+    models = get_models()
+    emp_info = find_employee(emp_identifier)
+    if not emp_info:
+        res = {"status": "error", "message": f"Không tìm thấy nhân viên: {emp_identifier}"}
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return res
+
+    emp_name = emp_info["name"]
+    user_id = emp_info.get("user_id")
+    job_title = emp_info.get("job_title") or "Nhân sự"
+    
+    target_branch = branch or emp_info.get("dept") or "Toàn Hệ Thống"
+    pid = find_project_id(target_branch)
+    
+    now_vn = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=7)
+    today_code = now_vn.strftime("%d/%m")
+    
+    if not shift_name:
+        hour = now_vn.hour
+        if hour < 14:
+            s_name = "Ca Sáng"
+        elif hour < 18:
+            s_name = "Ca Chiều"
+        else:
+            s_name = "Ca Tối"
+    else:
+        s_name = shift_name
+
+    task_title_prefix = f"[{s_name} {today_code}] {emp_name}"
+    full_title = f"{task_title_prefix} - {job_title}"
+    
+    domain = [
+        ("project_id", "=", pid),
+        ("name", "ilike", task_title_prefix)
+    ]
+    if user_id:
+        domain.append(("user_ids", "in", [user_id]))
+        
+    existing = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "project.task", "search_read",
+        [domain],
+        {"fields": ["id", "name", "description", "stage_id", "state"], "limit": 1}
+    )
+    
+    if existing:
+        task = existing[0]
+        desc = task.get("description") or ""
+        total = desc.count("<li>[ ]") + desc.count("<li>[x]")
+        done = desc.count("<li>[x]")
+        pct = int((done / total * 100)) if total > 0 else 0
+        res = {
+            "status": "exists",
+            "task_id": task["id"],
+            "title": task["name"],
+            "employee": emp_name,
+            "branch": target_branch,
+            "completed": done,
+            "total": total,
+            "percent": pct
+        }
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return res
+
+    items = custom_items or get_role_checklist(job_title)
+    total_items = len(items)
+    
+    items_html = ""
+    for i, item in enumerate(items, 1):
+        items_html += f"<li>[ ] <b>Mục {i}:</b> {item}</li>\n"
+        
+    now_str = now_vn.strftime("%d/%m/%Y %H:%M:%S")
+    desc_html = f"""<div style="font-family: Arial, sans-serif; line-height: 1.6;">
+  <h3 style="color: #0f766e; margin-bottom: 5px;">📋 PHIẾU CÔNG VIỆC CA - {emp_name.upper()}</h3>
+  <p style="margin: 0; color: #475569;">
+    <b>Chức danh:</b> {job_title} | <b>Chi nhánh:</b> {target_branch}<br/>
+    <b>Bắt đầu:</b> {now_str} | <b>Hạn chót ca:</b> Hôm nay
+  </p>
+  <div style="margin: 12px 0; padding: 10px; background-color: #f8fafc; border-left: 4px solid #0d9488; border-radius: 4px;">
+    <b>Tiến độ ca:</b> <span style="font-size: 16px; font-weight: bold; color: #0d9488;">0%</span> (0/{total_items} hạng mục hoàn tất)
+  </div>
+  <hr style="border: none; border-top: 1px dashed #cbd5e1; margin: 15px 0;"/>
+  <h4 style="color: #1e293b; margin-bottom: 8px;">Danh sách nhiệm vụ tiêu chuẩn trong ca:</h4>
+  <ol style="padding-left: 20px; color: #334155;">
+    {items_html}
+  </ol>
+  <p style="font-style: italic; color: #64748b; font-size: 13px;">
+    💡 Gõ '1 ok' hoặc 'xong 1 2' trên Zalo để cập nhật tiến độ tự động lên phiếu này.
+  </p>
+</div>"""
+    
+    tag_card = get_or_create_tag("Checklist Cá Nhân", color=4)
+    tag_progress = get_or_create_tag("Đang thực hiện", color=2)
+    tag_ids = []
+    if tag_card: tag_ids.append((4, tag_card))
+    if tag_progress: tag_ids.append((4, tag_progress))
+    
+    vals = {
+        "name": full_title,
+        "project_id": pid,
+        "stage_id": 1,
+        "state": "01_in_progress",
+        "description": desc_html,
+        "tag_ids": tag_ids
+    }
+    if user_id:
+        vals["user_ids"] = [(4, user_id)]
+        
+    task_id = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "project.task", "create",
+        [vals]
+    )
+    
+    res = {
+        "status": "created",
+        "task_id": task_id,
+        "title": full_title,
+        "employee": emp_name,
+        "branch": target_branch,
+        "items": items,
+        "total": total_items,
+        "completed": 0,
+        "percent": 0
+    }
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    return res
+
+def update_staff_shift_card(emp_identifier, completed_items_str, note=""):
+    models = get_models()
+    emp_info = find_employee(emp_identifier)
+    if not emp_info:
+        res = {"status": "error", "message": f"Không tìm thấy nhân sự: {emp_identifier}"}
+        print(json.dumps(res, ensure_ascii=False))
+        return res
+
+    emp_name = emp_info["name"]
+    user_id = emp_info.get("user_id")
+    now_vn = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=7)
+    today_code = now_vn.strftime("%d/%m")
+    now_time = now_vn.strftime("%H:%M")
+    
+    domain = [
+        ("name", "ilike", f"{today_code}] {emp_name}"),
+        ("state", "!=", "1_canceled")
+    ]
+    if user_id:
+        domain.append(("user_ids", "in", [user_id]))
+        
+    tasks = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "project.task", "search_read",
+        [domain],
+        {"fields": ["id", "name", "description", "stage_id", "state"], "limit": 1, "order": "id desc"}
+    )
+    if not tasks:
+        res = {"status": "error", "message": f"Không tìm thấy Thẻ công việc ca hôm nay của {emp_name}"}
+        print(json.dumps(res, ensure_ascii=False))
+        return res
+        
+    task = tasks[0]
+    task_id = task["id"]
+    desc = task.get("description") or ""
+    
+    raw_str = str(completed_items_str).lower().replace("xong", "").replace("ok", "").replace("mục", "").replace("việc", "")
+    nums = [int(n) for n in re.findall(r'\d+', raw_str)]
+    mark_all = "all" in str(completed_items_str).lower() or "hết" in str(completed_items_str).lower()
+    
+    lines = desc.split("\n")
+    new_lines = []
+    item_idx = 0
+    total_items = 0
+    completed_items = 0
+    
+    for line in lines:
+        if "<li>[ ]" in line or "<li>[x]" in line:
+            total_items += 1
+            item_idx += 1
+            if mark_all or (item_idx in nums) or ("<li>[x]" in line):
+                completed_items += 1
+                if "<li>[ ]" in line:
+                    line = line.replace("<li>[ ]", "<li>[x]")
+                    if "</span>" not in line:
+                        line = line.replace("</li>", f" <span style='color: #059669; font-size: 12px;'>✓ Xong {now_time}</span></li>")
+            new_lines.append(line)
+        else:
+            new_lines.append(line)
+            
+    pct = int((completed_items / total_items * 100)) if total_items > 0 else 100
+    new_desc = "\n".join(new_lines)
+    
+    new_desc = re.sub(r'Tiến độ ca:</b>.*?</div>', f'Tiến độ ca:</b> <span style="font-size: 16px; font-weight: bold; color: #0d9488;">{pct}%</span> ({completed_items}/{total_items} hạng mục hoàn tất)</div>', new_desc)
+    
+    write_vals = {"description": new_desc}
+    is_done = (pct >= 100)
+    if is_done:
+        tag_ok = get_or_create_tag("Đạt chuẩn", color=10)
+        write_vals["stage_id"] = 6
+        write_vals["state"] = "1_done"
+        if tag_ok:
+            write_vals["tag_ids"] = [(4, tag_ok)]
+            
+    models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "project.task", "write",
+        [[task_id], write_vals]
+    )
+    
+    chatter_msg = f"⚡ <b>Cập nhật tiến độ ca: {pct}% ({completed_items}/{total_items})</b>"
+    if note:
+        chatter_msg += f"<br/>- Ghi chú: {note}"
+    try:
+        models.execute_kw(
+            ODOO_DB, ODOO_UID, ODOO_API_KEY,
+            "project.task", "message_post",
+            [[task_id]],
+            {"body": chatter_msg, "message_type": "comment"}
+        )
+    except Exception:
+        pass
+        
+    res = {
+        "status": "success",
+        "task_id": task_id,
+        "employee": emp_name,
+        "completed": completed_items,
+        "total": total_items,
+        "percent": pct,
+        "all_done": is_done,
+        "message": f"Đã cập nhật tiến độ {pct}% ({completed_items}/{total_items}) cho {emp_name}."
+    }
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    return res
+
+def staff_check_in_with_card(emp_identifier, branch=None, shift_name=None, note=""):
+    att = attendance_check_in(emp_identifier)
+    card = get_or_create_staff_shift_card(emp_identifier, branch, shift_name)
+    emp_info = find_employee(emp_identifier)
+    emp_name = emp_info["name"] if emp_info else emp_identifier
+    now_vn = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=7)
+    time_str = now_vn.strftime("%H:%M:%S")
+    
+    res = {
+        "status": "success",
+        "employee": emp_name,
+        "check_in_time": time_str,
+        "attendance": att,
+        "shift_card": card,
+        "message": f"Chào bạn {emp_name}! Bạn đã check-in ca làm việc thành công lúc {time_str}."
+    }
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    return res
+
+def staff_check_out_with_summary(emp_identifier, note=""):
+    att = attendance_check_out(emp_identifier)
+    models = get_models()
+    emp_info = find_employee(emp_identifier)
+    if not emp_info:
+        return
+    emp_name = emp_info["name"]
+    now_vn = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=7)
+    today_code = now_vn.strftime("%d/%m")
+    
+    tasks = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "project.task", "search_read",
+        [[("name", "ilike", f"{today_code}] {emp_name}")]],
+        {"fields": ["id", "name", "description", "state"], "limit": 1}
+    )
+    pct = 100
+    completed = 0
+    total = 0
+    if tasks:
+        desc = tasks[0].get("description") or ""
+        total = desc.count("<li>[ ]") + desc.count("<li>[x]")
+        completed = desc.count("<li>[x]")
+        pct = int((completed / total * 100)) if total > 0 else 100
+        
+    res = {
+        "status": "success",
+        "employee": emp_name,
+        "check_out_time": now_vn.strftime("%H:%M:%S"),
+        "final_percent": pct,
+        "completed": completed,
+        "total": total,
+        "message": f"Nhân sự {emp_name} đã check-out ca với tỷ lệ hoàn thành checklist đạt {pct}% ({completed}/{total})."
+    }
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    return res
+
+def check_shift_roster_and_remind(branch="all"):
+    """Cơ chế 2: Quét lịch trực ca và điểm danh nhân sự"""
+    models = get_models()
+    now_vn = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=7)
+    today_str = now_vn.strftime("%Y-%m-%d")
+    hour = now_vn.hour
+    
+    if hour < 12:
+        current_shift = "Ca Sáng (06:30 - 12:00)"
+    elif hour < 17:
+        current_shift = "Ca Chiều (12:00 - 17:30)"
+    else:
+        current_shift = "Ca Tối (17:30 - 22:30)"
+        
+    domain = [("active", "=", True)]
+    emps = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "hr.employee", "search_read",
+        [domain],
+        {"fields": ["id", "name", "job_title", "mobile_phone", "work_phone", "department_id", "attendance_state"]}
+    )
+    
+    checked_in = []
+    not_checked_in = []
+    
+    for e in emps:
+        state = e.get("attendance_state") or "checked_out"
+        info = {
+            "id": e["id"],
+            "name": e["name"],
+            "job": e.get("job_title") or "Nhân sự",
+            "phone": e.get("mobile_phone") or e.get("work_phone") or "",
+            "dept": e.get("department_id")[1] if e.get("department_id") else ""
+        }
+        if state == "checked_in":
+            checked_in.append(info)
+        else:
+            not_checked_in.append(info)
+            
+    summary = {
+        "current_time": now_vn.strftime("%d/%m/%Y %H:%M:%S"),
+        "shift": current_shift,
+        "total_active_employees": len(emps),
+        "checked_in_count": len(checked_in),
+        "not_checked_in_count": len(not_checked_in),
+        "checked_in_list": checked_in,
+        "not_checked_in_list": not_checked_in
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return summary
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: odoo_cli <command> [args...]")
@@ -1801,6 +2202,42 @@ if __name__ == "__main__":
         br = sys.argv[2] if len(sys.argv) > 2 else "all"
         d = sys.argv[3] if len(sys.argv) > 3 else None
         get_daily_shift_summary(br, d)
+
+
+    elif cmd == "get_or_create_staff_shift_card":
+        if len(sys.argv) < 3:
+            print("Error: requires <employee> [branch] [shift_name]")
+            sys.exit(1)
+        br = sys.argv[3] if len(sys.argv) > 3 else None
+        sh = sys.argv[4] if len(sys.argv) > 4 else None
+        get_or_create_staff_shift_card(sys.argv[2], br, sh)
+
+    elif cmd == "update_staff_shift_card":
+        if len(sys.argv) < 4:
+            print("Error: requires <employee> <completed_items> [note]")
+            sys.exit(1)
+        nt = sys.argv[4] if len(sys.argv) > 4 else ""
+        update_staff_shift_card(sys.argv[2], sys.argv[3], nt)
+
+    elif cmd == "staff_check_in":
+        if len(sys.argv) < 3:
+            print("Error: requires <employee> [branch] [shift_name] [note]")
+            sys.exit(1)
+        br = sys.argv[3] if len(sys.argv) > 3 else None
+        sh = sys.argv[4] if len(sys.argv) > 4 else None
+        nt = sys.argv[5] if len(sys.argv) > 5 else ""
+        staff_check_in_with_card(sys.argv[2], br, sh, nt)
+
+    elif cmd == "staff_check_out":
+        if len(sys.argv) < 3:
+            print("Error: requires <employee> [note]")
+            sys.exit(1)
+        nt = sys.argv[3] if len(sys.argv) > 3 else ""
+        staff_check_out_with_summary(sys.argv[2], nt)
+
+    elif cmd == "check_shift_roster":
+        br = sys.argv[2] if len(sys.argv) > 2 else "all"
+        check_shift_roster_and_remind(br)
 
     else:
         print(f"Unknown command: {cmd}")
