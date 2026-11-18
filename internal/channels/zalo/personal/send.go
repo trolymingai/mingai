@@ -31,12 +31,17 @@ func (c *Channel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 	threadType := protocol.ThreadTypeUser
 	if c.IsGroupApproved(msg.ChatID) {
 		threadType = protocol.ThreadTypeGroup
+	} else if _, isGroup := c.groupNames.Load(msg.ChatID); isGroup {
+		threadType = protocol.ThreadTypeGroup
+		c.MarkGroupApproved(msg.ChatID)
 	} else if msg.Metadata != nil {
 		if _, ok := msg.Metadata["group_id"]; ok {
 			threadType = protocol.ThreadTypeGroup
 			c.MarkGroupApproved(msg.ChatID)
 		}
 	}
+
+	slog.Info("zalo_personal Send routing", "chatID", msg.ChatID, "threadType", threadType)
 
 	// Send media attachments.
 	for _, media := range msg.Media {
@@ -86,7 +91,14 @@ func (c *Channel) sendFile(ctx context.Context, sess *protocol.Session, chatID s
 
 func (c *Channel) sendChunkedText(ctx context.Context, sess *protocol.Session, chatID string, threadType protocol.ThreadType, text string) error {
 	for _, chunk := range channels.ChunkMarkdown(text, maxTextLength) {
-		if _, err := protocol.SendMessage(ctx, sess, chatID, threadType, chunk); err != nil {
+		var mentions []*protocol.TMention
+		if threadType == protocol.ThreadTypeGroup {
+			mentions = c.ExtractMentions(chunk)
+			slog.Info("zalo_personal: sendChunkedText group mentions", "chatID", chatID, "mentionsCount", len(mentions))
+		}
+		res, err := protocol.SendMessageWithMentions(ctx, sess, chatID, threadType, chunk, mentions)
+		slog.Info("zalo_personal: SendMessageWithMentions result", "chatID", chatID, "res", res, "err", err)
+		if err != nil {
 			return err
 		}
 	}

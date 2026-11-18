@@ -203,13 +203,12 @@ func SendImage(ctx context.Context, sess *Session, threadID string, threadType T
 		return "", fmt.Errorf("zalo_personal: decrypt image send response: %w", err)
 	}
 
-	var result struct {
-		MsgID json.Number `json:"msgId"`
-	}
+	var result map[string]any
 	if err := json.Unmarshal(plain, &result); err != nil {
 		return "", fmt.Errorf("zalo_personal: parse image send result: %w", err)
 	}
-	return result.MsgID.String(), nil
+	msgIDStr := fmt.Sprintf("%v", result["msgId"])
+	return msgIDStr, nil
 }
 
 // imageDimensions extracts width and height from an image (PNG, JPEG, etc.).

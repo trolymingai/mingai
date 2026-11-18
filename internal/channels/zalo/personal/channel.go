@@ -160,6 +160,7 @@ func (c *Channel) LoadGroupNames(ctx context.Context) {
 	for _, g := range groups {
 		if g.GroupID != "" && g.Name != "" {
 			c.groupNames.Store(g.GroupID, g.Name)
+			c.MarkGroupApproved(g.GroupID)
 			slog.Info("zalo_personal: cached group name", "group_id", g.GroupID, "name", g.Name)
 		}
 	}

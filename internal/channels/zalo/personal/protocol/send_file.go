@@ -216,13 +216,12 @@ func SendFile(ctx context.Context, sess *Session, threadID string, threadType Th
 		return "", fmt.Errorf("zalo_personal: decrypt file send response: %w", err)
 	}
 
-	var result struct {
-		MsgID json.Number `json:"msgId"`
-	}
+	var result map[string]any
 	if err := json.Unmarshal(plain, &result); err != nil {
 		return "", fmt.Errorf("zalo_personal: parse file send result: %w", err)
 	}
-	return result.MsgID.String(), nil
+	msgIDStr := fmt.Sprintf("%v", result["msgId"])
+	return msgIDStr, nil
 }
 
 // md5Hash returns the MD5 hex digest. Required by Zalo's file upload API checksum field.

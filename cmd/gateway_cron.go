@@ -12,6 +12,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
+	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/scheduler"
 	"github.com/nextlevelbuilder/goclaw/internal/sessions"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
@@ -150,6 +151,21 @@ func makeCronJobHandler(sched *scheduler.Scheduler, msgBus *bus.MessageBus, cfg 
 				}
 				appendMediaToOutbound(&outMsg, result.Media)
 				msgBus.PublishOutbound(outMsg)
+
+				// Also sync assistant message into target channel session in DB
+				// so users see the cron delivery in GoClaw Web UI chat history.
+				if sessionMgr != nil {
+					kind := sessions.PeerDirect
+					if peerKind == "group" {
+						kind = sessions.PeerGroup
+					}
+					targetSessionKey := sessions.BuildSessionKey(agentID, job.DeliverChannel, kind, job.DeliverTo)
+					sessionMgr.AddMessage(cronCtx, targetSessionKey, providers.Message{
+						Role:    "assistant",
+						Content: result.Content,
+					})
+					_ = sessionMgr.Save(cronCtx, targetSessionKey)
+				}
 			}
 		} else if job.Deliver {
 			slog.Warn("cron: delivery configured but channel/chatID missing — output discarded",

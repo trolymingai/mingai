@@ -10,9 +10,14 @@ import (
 	"time"
 )
 
-// SendMessage sends a text message to a user or group.
-// threadID: user UID (DM) or group ID (group).
+// SendMessage sends a text message to a user or group without mentions.
 func SendMessage(ctx context.Context, sess *Session, threadID string, threadType ThreadType, text string) (string, error) {
+	return SendMessageWithMentions(ctx, sess, threadID, threadType, text, nil)
+}
+
+// SendMessageWithMentions sends a text message to a user or group with optional mentions.
+// threadID: user UID (DM) or group ID (group).
+func SendMessageWithMentions(ctx context.Context, sess *Session, threadID string, threadType ThreadType, text string, mentions []*TMention) (string, error) {
 	if text == "" {
 		return "", fmt.Errorf("zalo_personal: message text cannot be empty")
 	}
@@ -21,7 +26,11 @@ func SendMessage(ctx context.Context, sess *Session, threadID string, threadType
 	apiPath := "/api/message/sms"
 	if threadType == ThreadTypeGroup {
 		serviceKey = "group"
-		apiPath = "/api/group/sendmsg"
+		if len(mentions) > 0 {
+			apiPath = "/api/group/mention"
+		} else {
+			apiPath = "/api/group/sendmsg"
+		}
 	}
 
 	baseURL := getServiceURL(sess, serviceKey)
@@ -38,6 +47,11 @@ func SendMessage(ctx context.Context, sess *Session, threadID string, threadType
 	if threadType == ThreadTypeGroup {
 		payload["grid"] = threadID
 		payload["visibility"] = 0
+		if len(mentions) > 0 {
+			mentionJSON, _ := json.Marshal(mentions)
+			payload["mentionInfo"] = string(mentionJSON)
+			payload["mentions"] = mentions
+		}
 	} else {
 		payload["toid"] = threadID
 		payload["imei"] = sess.IMEI
@@ -83,14 +97,14 @@ func SendMessage(ctx context.Context, sess *Session, threadID string, threadType
 		return "", fmt.Errorf("zalo_personal: decrypt send response: %w", err)
 	}
 
-	var result struct {
-		MsgID json.Number `json:"msgId"`
-	}
+	var result map[string]any
 	if err := json.Unmarshal(plain, &result); err != nil {
-		return "", fmt.Errorf("zalo_personal: parse send result: %w", err)
+		return string(plain), nil
 	}
-
-	return result.MsgID.String(), nil
+	if msgID, ok := result["msgId"]; ok {
+		return fmt.Sprintf("%v", msgID), nil
+	}
+	return string(plain), nil
 }
 
 // SendTypingEvent sends a typing indicator to a user or group.
