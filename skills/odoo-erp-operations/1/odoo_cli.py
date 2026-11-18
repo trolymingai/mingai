@@ -1468,6 +1468,164 @@ def get_daily_hr_pulse_message(branch="Ming Coffee"):
     lines = prompts.get(weekday, prompts[0])
     return chr(10).join(lines)
 
+def create_shift_checklist_task(branch, shift_type, shift_leader=None, staff_list=None):
+    """
+    Sinh Task Checklist Ca trực tuyến trên Odoo ERP:
+    - Tạo task có đầy đủ các checklist đầu ca/cuối ca và phân công nhân sự
+    - Trả về Online Access URL (Tokenized) để nhân sự bấm vào xem/tick trực tiếp
+    """
+    models = get_models()
+    pid = find_project_id(branch)
+    now_vn = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=7)
+    date_str = now_vn.strftime("%d/%m/%Y")
+    now_str = now_vn.strftime("%Y-%m-%d %H:%M:%S")
+
+    stype_clean = "Đầu Ca (Mở Cửa)" if "đầu" in shift_type.lower() or "open" in shift_type.lower() or "sáng" in shift_type.lower() else "Cuối Ca (Đóng Cửa)"
+
+    leader_info = find_employee(shift_leader) if shift_leader else None
+    leader_name = leader_info["name"] if leader_info else (shift_leader or "Ca trưởng")
+
+    items_open = """
+    <h4>1. Vận Hành & An Toàn Chi Nhánh:</h4>
+    <ul>
+      <li>[ ] Kiểm tra vệ sinh khu vực quầy pha chế, bàn ghế & sảnh đón khách</li>
+      <li>[ ] Đo & ghi nhận nhiệt độ tủ mát (chuẩn: 2.0°C - 5.0°C)</li>
+      <li>[ ] Đo & ghi nhận nhiệt độ tủ đông (chuẩn: -18.0°C đến -14.0°C)</li>
+      <li>[ ] Kiểm tra áp suất nồi hơi máy pha (chuẩn: 1.1 - 1.3 bar)</li>
+      <li>[ ] Kiểm tra tiền lẻ đầu ca và két thu ngân</li>
+      <li>[ ] Kiểm tra tác phong đồng phục, bảng tên, tạp dề cả ca</li>
+    </ul>
+    """
+
+    items_close = """
+    <h4>1. Bàn Giao & Đóng Cửa Chi Nhánh:</h4>
+    <ul>
+      <li>[ ] Vệ sinh họng pha cà phê & xả cặn máy xay</li>
+      <li>[ ] Vệ sinh toàn bộ dụng cụ quầy bar, khay nhỏ giọt</li>
+      <li>[ ] Niêm phong doanh thu tiền mặt ca & chốt sổ két</li>
+      <li>[ ] Tắt máy lạnh, bảng hiệu, bếp, hệ thống điện phụ tải</li>
+      <li>[ ] Kiểm tra khóa cửa, kích hoạt camera an ninh & báo động</li>
+    </ul>
+    """
+
+    checklist_items = items_open if "Đầu" in stype_clean else items_close
+    staff_display = staff_list if staff_list else leader_name
+
+    desc_html = f"""
+    <h3>📋 BẢNG CHECKLIST VẬN HÀNH {stype_clean.upper()} - {branch.upper()}</h3>
+    <p><strong>Ngày thực hiện:</strong> {date_str} ({now_str})<br/>
+    <strong>Ca trưởng / Người phụ trách:</strong> {leader_name}<br/>
+    <strong>Nhân sự trong ca:</strong> {staff_display}</p>
+    <hr/>
+    {checklist_items}
+    <h4>2. Ghi Chú & Nhiệm Vụ Phát Sinh:</h4>
+    <p><i>(Các công việc đột xuất phát sinh trong ca được quản lý giao thêm sẽ được cập nhật tại đây)</i></p>
+    <hr/>
+    <p>💡 <i>Nhân sự có thể xác nhận nhanh bằng cách nhắn vào Zalo: <code>Ming ơi, mở ca xong, tủ mát 3 độ, nồi hơi 1.2 bar</code> hoặc cập nhật trực tiếp trên hệ thống Odoo ERP.</i></p>
+    """
+
+    vals = {
+        "name": f"[{stype_clean} {date_str}] {branch}",
+        "project_id": pid,
+        "stage_id": 1,
+        "state": "01_in_progress",
+        "priority": "0",
+        "description": desc_html
+    }
+
+    if leader_info and leader_info.get("user_id"):
+        vals["user_ids"] = [(4, leader_info["user_id"])]
+
+    tag_open = get_or_create_tag("Checklist Mở Ca", color=4) if "Đầu" in stype_clean else get_or_create_tag("Checklist Đóng Ca", color=2)
+    if tag_open:
+        vals["tag_ids"] = [(4, tag_open)]
+
+    task_id = models.execute_kw(ODOO_DB, ODOO_UID, ODOO_API_KEY, "project.task", "create", [vals])
+
+    # Fetch tokenized online URL
+    task_data = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "project.task", "search_read",
+        [[["id", "=", task_id]]],
+        {"fields": ["id", "name", "access_url", "access_token"]}
+    )[0]
+
+    online_url = f"https://erp.mingcoffeemore.com{task_data['access_url']}?access_token={task_data['access_token']}"
+
+    # Chatter log
+    chatter = f"📋 <b>Khởi tạo Checklist {stype_clean}</b><br/>- Chi nhánh: <b>{branch}</b><br/>- Ca trưởng: <b>{leader_name}</b><br/>- Link trực tuyến: <a href='{online_url}' target='_blank'>Xem trên Odoo ERP</a>"
+    try:
+        models.execute_kw(ODOO_DB, ODOO_UID, ODOO_API_KEY, "project.task", "message_post", [[task_id]], {"body": chatter, "message_type": "comment"})
+    except Exception:
+        pass
+
+    result = {
+        "status": "success",
+        "task_id": task_id,
+        "branch": branch,
+        "shift_type": stype_clean,
+        "shift_leader": leader_name,
+        "online_url": online_url,
+        "message": f"Đã sinh bảng checklist trực tuyến #{task_id} cho {branch}."
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return result
+
+
+def get_daily_shift_summary(branch="all", date_str=None):
+    """
+    Tổng hợp báo cáo nhanh cuối ca/ngày cho CEO và CHT:
+    - Những gì đã làm, những gì chưa làm
+    - Những task phát sinh đã hoàn tất
+    """
+    models = get_models()
+    now_vn = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=7)
+    target_date = date_str or now_vn.strftime("%Y-%m-%d")
+
+    domain = [["create_date", ">=", f"{target_date} 00:00:00"]]
+    if branch and branch != "all":
+        pid = find_project_id(branch)
+        domain.append(["project_id", "=", pid])
+
+    tasks = models.execute_kw(
+        ODOO_DB, ODOO_UID, ODOO_API_KEY,
+        "project.task", "search_read",
+        [domain],
+        {"fields": ["id", "name", "project_id", "stage_id", "state", "user_ids", "write_date"], "limit": 50, "order": "id desc"}
+    )
+
+    done_tasks = []
+    pending_tasks = []
+
+    for t in tasks:
+        pname = t["project_id"][1] if t.get("project_id") else "Chung"
+        users = [u[1] for u in t.get("user_ids", [])] if t.get("user_ids") else ["Chưa gán"]
+        item = {
+            "id": t["id"],
+            "title": t["name"],
+            "branch": pname,
+            "assigned_to": ", ".join(users),
+            "state": t["state"]
+        }
+        if t["state"] in ["1_done", "done"] or (t.get("stage_id") and t["stage_id"][0] == 6):
+            done_tasks.append(item)
+        else:
+            pending_tasks.append(item)
+
+    summary = {
+        "status": "success",
+        "date": target_date,
+        "branch": branch,
+        "total_tasks": len(tasks),
+        "completed_count": len(done_tasks),
+        "pending_count": len(pending_tasks),
+        "completed_tasks": done_tasks,
+        "pending_tasks": pending_tasks
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return summary
+
+
 def send_daily_hr_pulse(branch="Ming Coffee"):
     msg = get_daily_hr_pulse_message(branch)
     print(json.dumps({
@@ -1630,6 +1788,19 @@ if __name__ == "__main__":
     elif cmd == "send_daily_hr_pulse":
         br = sys.argv[2] if len(sys.argv) > 2 else "Ming Coffee"
         send_daily_hr_pulse(br)
+
+    elif cmd == "create_shift_checklist":
+        if len(sys.argv) < 4:
+            print("Error: create_shift_checklist requires <branch> <shift_type: open|close> [shift_leader] [staff_list]")
+            sys.exit(1)
+        leader = sys.argv[4] if len(sys.argv) > 4 else None
+        staff = sys.argv[5] if len(sys.argv) > 5 else None
+        create_shift_checklist_task(sys.argv[2], sys.argv[3], leader, staff)
+
+    elif cmd == "get_daily_shift_summary":
+        br = sys.argv[2] if len(sys.argv) > 2 else "all"
+        d = sys.argv[3] if len(sys.argv) > 3 else None
+        get_daily_shift_summary(br, d)
 
     else:
         print(f"Unknown command: {cmd}")

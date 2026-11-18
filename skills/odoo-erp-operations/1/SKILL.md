@@ -95,3 +95,18 @@ odoo_cli send_daily_hr_pulse "<Chi nhánh>"
 - **Thứ 5 (Trục C):** Làm gương & chú tâm (Khơi gợi lời khen/sự chú tâm).
 - **Thứ 6 (Trục E):** Tương trợ đồng đội (Chuẩn bị tinh thần cuối tuần đông khách).
 - **Thứ 7 & CN (Trục T):** Cảm nhận chung & Gắn kết (Lời cảm ơn tuần làm việc).
+
+---
+
+## 10. Checklist Ca Làm Việc Trực Tuyến & Báo Cáo Ca (Online Checklist & Shift Summary)
+Tạo bảng Checklist vận hành đầu ca / cuối ca trực tuyến trên Odoo ERP (có Link Tokenized để nhân sự mở trực tiếp trên điện thoại không cần đăng nhập):
+```bash
+odoo_cli create_shift_checklist "<Chi nhánh>" "<open | close>" "[Tên Ca trưởng]" "[Danh sách nhân sự trong ca]"
+```
+*Kết quả trả về:* `task_id`, `online_url` (định dạng: `https://erp.mingcoffeemore.com/my/tasks/<id>?access_token=<token>`).
+
+Tổng hợp báo cáo tiến độ ca làm việc cho CEO Dương Vương Minh và Cửa Hàng Trưởng (những gì đã làm, chưa làm, task phát sinh):
+```bash
+odoo_cli get_daily_shift_summary "[Chi nhánh hoặc all]" "[YYYY-MM-DD]"
+```
+
