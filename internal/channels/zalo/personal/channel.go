@@ -29,6 +29,7 @@ type Channel struct {
 	listener *protocol.Listener
 
 	groupNames sync.Map // threadID string -> groupName string
+	contactRegistry sync.Map // normalized name -> uid string
 
 	// Pre-loaded credentials (from DB or from file/QR as fallback).
 	preloadedCreds *protocol.Credentials
@@ -68,6 +69,7 @@ func New(cfg config.ZaloPersonalConfig, msgBus *bus.MessageBus, pairingSvc store
 	ch.SetGroupHistory(channels.MakeHistory(channels.TypeZaloPersonal, pendingStore, base.TenantID()))
 	ch.SetHistoryLimit(historyLimit)
 	ch.SetRequireMention(requireMention)
+	ch.initContactRegistry()
 	return ch, nil
 }
 

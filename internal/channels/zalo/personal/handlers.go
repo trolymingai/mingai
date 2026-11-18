@@ -48,6 +48,22 @@ func (c *Channel) handleDM(msg protocol.UserMessage) {
 		return
 	}
 
+	// Fast-path: When staff/user in DM sends a sticker, icon/emoji, or casual social acknowledgment/courtesy,
+	// react with heart (thả tim) to confirm receipt and do NOT spam text reply.
+	isSticker := msg.Data.MsgType == "chat.sticker"
+	isEmoji := isOnlyEmojiOrSticker(content)
+	if isSticker || isEmoji || isSocialAckOrPleasantry(content) {
+		slog.Info("zalo_personal: received sticker/emoji/ack in DM, sending heart reaction and muting text reply",
+			"sender", senderID,
+			"msg_id", msg.Data.MsgID,
+		)
+		sess := c.session()
+		if sess != nil {
+			_ = protocol.SendReaction(ctx, sess, threadID, protocol.ThreadTypeUser, msg.Data.MsgID, msg.Data.GetCliMsgID(), "/-heart", 5)
+		}
+		return
+	}
+
 	// Annotate with sender display name so the agent knows who is messaging.
 	senderName := msg.Data.DName
 	if senderName != "" {
@@ -137,6 +153,23 @@ func (c *Channel) handleGroupMessage(msg protocol.GroupMessage) {
 			"sender", senderName,
 		)
 		return
+	}
+
+	// Step 2b: Zero-Reply filter for social acks / courtesies even when tagged.
+	// If the message only consists of casual pleasantries (e.g., "@Ming AI ok", "@Ming AI cảm ơn", "@Ming AI dạ"),
+	// react with heart to silently confirm receipt without spamming the group chat with useless text.
+	strippedContent := stripBotMentions(content)
+	if isSocialAckOrPleasantry(strippedContent) || isOnlyEmojiOrSticker(strippedContent) {
+		slog.Info("zalo_personal: received social ack/pleasantry with mention in group, sending heart reaction and muting text reply",
+			"group_id", threadID,
+			"sender", senderName,
+			"msg_id", msg.Data.MsgID,
+		)
+		sess := c.session()
+		if sess != nil {
+			_ = protocol.SendReaction(ctx, sess, threadID, protocol.ThreadTypeGroup, msg.Data.MsgID, msg.Data.GetCliMsgID(), "/-heart", 5)
+		}
+		return // Do not forward to agent loop, zero text reply
 	}
 
 	// Requirement 4: Detect new member self-introduction in group (only applied when bot is mentioned/tagged)
@@ -363,9 +396,17 @@ func isBotMentionedInText(content string) bool {
 		"@trợ lý ming",
 		"@trolyming",
 		"@trợlýming",
+		"@ming ai",
+		"@mingai",
 		"@troly",
 		"@trợ lý",
 		"@bot",
+		"trợ lý ming ơi",
+		"tro ly ming oi",
+		"ming ơi",
+		"ming oi",
+		"ming ai ơi",
+		"ming ai oi",
 	}
 	for _, kw := range tagKeywords {
 		if strings.Contains(lower, kw) {
@@ -373,4 +414,122 @@ func isBotMentionedInText(content string) bool {
 		}
 	}
 	return false
+}
+
+// stripBotMentions removes known bot mention triggers from the text so we can inspect the core message.
+func stripBotMentions(content string) string {
+	res := content
+	lowerTriggers := []string{
+		"@troly ming",
+		"@trợ lý ming",
+		"@trolyming",
+		"@trợlýming",
+		"@ming ai",
+		"@mingai",
+		"@ming",
+		"@troly",
+		"@trợ lý",
+		"@bot",
+		"trợ lý ming ơi",
+		"tro ly ming oi",
+		"ming ơi",
+		"ming oi",
+		"ming ai ơi",
+		"ming ai oi",
+	}
+	for _, trigger := range lowerTriggers {
+		for {
+			idx := strings.Index(strings.ToLower(res), trigger)
+			if idx == -1 {
+				break
+			}
+			res = res[:idx] + res[idx+len(trigger):]
+		}
+	}
+	return strings.TrimSpace(res)
+}
+
+// isSocialAckOrPleasantry checks if a message is purely a conversational acknowledgment,
+// greeting, or courtesy with zero operational action required.
+func isSocialAckOrPleasantry(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return true // Empty message (e.g. only tagged bot)
+	}
+
+	// Normalize: lower case and strip standard punctuation
+	normalized := strings.ToLower(trimmed)
+	normalized = strings.Trim(normalized, " .,:;!?'\"`~*#-_()[]{}<>/\\")
+
+	// If after stripping punctuation it's empty, treat as pure filler
+	if normalized == "" {
+		return true
+	}
+
+	// Exact matches for pure acknowledgments and courtesies
+	ackWords := map[string]bool{
+		// Affirmations / ACK
+		"da": true, "dạ": true,
+		"vang": true, "vâng": true,
+		"da vang": true, "dạ vâng": true,
+		"da vang a": true, "dạ vâng ạ": true,
+		"vang a": true, "vâng ạ": true,
+		"da a": true, "dạ a": true,
+		"da anh": true, "dạ anh": true,
+		"da c": true, "dạ c": true,
+		"da chi": true, "dạ chị": true,
+		"da em biet": true, "dạ em biết": true,
+		"da em biet roi": true, "dạ em biết rồi": true,
+		"em biet roi": true, "em biết rồi": true,
+		"da e biet roi": true, "dạ e biết rồi": true,
+		"da ro": true, "dạ rõ": true,
+		"ro": true, "rõ": true,
+		"da em ro": true, "dạ em rõ": true,
+		"da e ro": true, "dạ e rõ": true,
+		"da em hieu": true, "dạ em hiểu": true,
+		"em hieu roi": true, "em hiểu rồi": true,
+		"da hieu": true, "dạ hiểu": true,
+		"da nhan": true, "dạ nhận": true,
+		"da nhan duoc": true, "dạ nhận được": true,
+		"da nhan roi": true, "dạ nhận rồi": true,
+		"em nhan roi": true, "em nhận rồi": true,
+		"da e nhan roi": true, "dạ e nhận rồi": true,
+		"e nhan roi": true, "e nhận rồi": true,
+		"da nhan thong tin": true, "dạ nhận thông tin": true,
+		"da e ro a": true, "dạ e rõ ạ": true,
+		"da e hieu roi a": true, "dạ e hiểu rồi ạ": true,
+		"ok": true, "oke": true, "oki": true, "okie": true,
+		"ok a": true, "ok em": true, "ok anh": true,
+		"ok c": true, "ok chi": true, "ok chị": true,
+		"ok nhe": true, "ok nhé": true, "ok nha": true,
+		"oke nha": true, "oki nha": true, "ok r": true,
+		"ok roi": true, "ok rồi": true, "ok luon": true, "ok luôn": true,
+		"ok b": true, "ok bạn": true, "ok ban": true,
+		"da em cam on": true, "dạ em cảm ơn": true,
+		"da cam on": true, "dạ cảm ơn": true,
+		"cam on": true, "cảm ơn": true,
+		"cam on nha": true, "cảm ơn nha": true,
+		"cam on nhe": true, "cảm ơn nhé": true,
+		"cam on a": true, "cảm ơn a": true,
+		"cam on anh": true, "cảm ơn anh": true,
+		"cam on c": true, "cảm ơn c": true,
+		"cam on chi": true, "cảm ơn chị": true,
+		"cam on nhieu": true, "cảm ơn nhiều": true,
+		"tks": true, "thanks": true, "thank you": true, "ty": true, "thank": true,
+		"thank kiu": true, "thx": true,
+		// Greetings / Social
+		"chao": true, "chào": true,
+		"chao a": true, "chào a": true,
+		"chao anh": true, "chào anh": true,
+		"chao em": true, "chào em": true,
+		"chao ca nha": true, "chào cả nhà": true,
+		"hi": true, "hello": true, "helo": true, "alo": true,
+		"haha": true, "hahaha": true, "hihi": true, "hihihi": true,
+		"hehe": true, "hehehe": true, "hjhj": true, "kaka": true, "keke": true,
+		"ngu ngon": true, "ngủ ngon": true,
+		"chuc ngu ngon": true, "chúc ngủ ngon": true,
+		"bye": true, "good night": true, "g9": true,
+	}
+
+	return ackWords[normalized]
 }
