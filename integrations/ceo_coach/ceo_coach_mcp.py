@@ -687,7 +687,7 @@ TOOLS = {
         "fn": tool_rollback
     },
     "ceo_read_and_parse_file": {
-        "description": "Đọc và bóc tách toàn bộ nội dung từ tệp tin bất kỳ (Word .docx, PDF, Excel .xlsx, CSV, TXT, JSON, MD, hoặc liên kết Google Drive, Google Docs, Google Sheets, Google Slides) do Anh Minh CEO gửi trong Zalo 1-1.",
+        "description": "Đọc và bóc tách toàn bộ nội dung từ tệp tin bất kỳ (Word .docx, PDF, Excel .xlsx, CSV, TXT, JSON, MD, hoặc liên kết Google Drive, Google Docs, Google Sheets, Google Slides) cho TẤT CẢ CÁC THÀNH VIÊN TRONG CÔNG TY khi được yêu cầu.",
         "schema": {
             "type": "object",
             "properties": {
