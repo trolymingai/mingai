@@ -39,7 +39,6 @@ def save_state(state):
 def send_zalo_dm(chat_id, message):
     try:
         ws = websocket.create_connection(GATEWAY_WS, timeout=10)
-        # Connect
         connect_req = {
             "type": "req",
             "id": "c1",
@@ -49,7 +48,6 @@ def send_zalo_dm(chat_id, message):
         ws.send(json.dumps(connect_req))
         ws.recv()
         
-        # Send
         send_req = {
             "type": "req",
             "id": f"remind_{chat_id}_{int(time.time())}",
@@ -105,14 +103,10 @@ def run_roster_check():
         att_state = emp.get("attendance_state") or "checked_out"
         zalo_id = emp.get("work_phone") or emp.get("mobile_phone")
         
-        # Nếu chưa điểm danh và có Zalo ID và chưa được nhắc trong ca này
         if att_state != "checked_in" and zalo_id and str(emp_id) not in reminded_today:
             msg = (
-                f"☕ [MING AI] Chào bạn {emp_name}!
-"
-                f"Ca làm việc {shift_name} hôm nay đã bắt đầu. Khi bạn đến quán nhận ca, hãy nhắn 'vào ca' hoặc 'check-in' để Ming kích hoạt Thẻ kiểm tra công việc và điểm danh nhé!
-
-"
+                f"☕ [MING AI] Chào bạn {emp_name}!\n"
+                f"Ca làm việc {shift_name} hôm nay đã bắt đầu. Khi bạn đến quán nhận ca, hãy nhắn 'vào ca' hoặc 'check in' để Ming kích hoạt Thẻ kiểm tra công việc và điểm danh nhé!\n\n"
                 f"✨ Chúc bạn có một ca làm việc tràn đầy năng lượng và chú tâm!"
             )
             

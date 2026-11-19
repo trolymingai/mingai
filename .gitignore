@@ -111,3 +111,6 @@ ui/web/nginx.staging.conf
 scripts/docker-patch-*.sql
 ui/web/.pnpm-store/
 goclaw-new
+__pycache__/
+*.sqlite
+vault/
