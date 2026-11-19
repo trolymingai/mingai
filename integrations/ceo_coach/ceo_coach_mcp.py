@@ -8,6 +8,7 @@ import datetime
 import uuid
 import zipfile
 import io
+import csv
 import psycopg2
 
 try:
@@ -222,59 +223,196 @@ def tool_rollback(args):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-# --- 4. PARSE FILE / DOC / DRIVE ---
+# --- 4. ROBUST FILE & GOOGLE DRIVE / DOCS PARSER ---
 def tool_read_and_parse_file(args):
     target = (args.get("file_path_or_url") or "").strip()
     if not target:
         return {"ok": False, "error": "Vui lòng cung cấp file_path_or_url (đường dẫn tệp tin hoặc liên kết Drive/Docs)."}
 
-    # Case A: Google Drive / Docs / Sheets URL
+    # Case A: Google Drive / Docs / Sheets URL or web link
     if target.startswith("http://") or target.startswith("https://"):
         if not requests:
             return {"ok": False, "error": "requests library is required for URL downloads"}
-        
+
+        session = requests.Session()
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
         m_doc = re.search(r"docs\.google\.com/document/d/([a-zA-Z0-9_-]+)", target)
         m_sheet = re.search(r"docs\.google\.com/spreadsheets/d/([a-zA-Z0-9_-]+)", target)
+        m_slide = re.search(r"docs\.google\.com/presentation/d/([a-zA-Z0-9_-]+)", target)
         m_file = re.search(r"drive\.google\.com/file/d/([a-zA-Z0-9_-]+)", target)
-        
-        if m_doc:
-            export_url = f"https://docs.google.com/document/d/{m_doc.group(1)}/export?format=txt"
-            doc_type = "google_doc"
-        elif m_sheet:
-            export_url = f"https://docs.google.com/spreadsheets/d/{m_sheet.group(1)}/export?format=csv"
-            doc_type = "google_sheet"
-        elif m_file:
-            export_url = f"https://drive.google.com/uc?export=download&id={m_file.group(1)}"
-            doc_type = "google_drive_file"
-        else:
-            export_url = target
-            doc_type = "web_url"
 
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            resp = requests.get(export_url, headers=headers, timeout=25, allow_redirects=True)
-            if "accounts.google.com" in resp.url or "ServiceLogin" in resp.text:
+            # A1: Google Docs
+            if m_doc:
+                doc_id = m_doc.group(1)
+                export_url = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
+                resp = session.get(export_url, headers=headers, timeout=25, allow_redirects=True)
+                if "accounts.google.com" in resp.url or "ServiceLogin" in resp.text:
+                    return {
+                        "ok": False,
+                        "error": "Tài liệu Google Docs này đang ở chế độ RIÊNG TƯ. Vui lòng chọn 'Bất kỳ ai có liên kết đều có thể xem' (Anyone with link can view) để Ming AI đọc được."
+                    }
+                text = resp.text.strip()
                 return {
-                    "ok": False,
-                    "error": "Link Google Drive này đang ở chế độ RIÊNG TƯ. Vui lòng mở quyền 'Bất kỳ ai có liên kết đều có thể xem' (Anyone with link can view) để Ming AI có thể đọc nội dung."
+                    "ok": True,
+                    "doc_type": "google_doc",
+                    "doc_id": doc_id,
+                    "url": target,
+                    "char_count": len(text),
+                    "preview": text[:500],
+                    "content": text
                 }
-            if resp.status_code != 200:
-                return {"ok": False, "error": f"Lỗi kết nối: HTTP {resp.status_code}"}
-            
-            text = resp.text.strip()
-            return {
-                "ok": True,
-                "doc_type": doc_type,
-                "url": target,
-                "char_count": len(text),
-                "preview": text[:500],
-                "content": text
-            }
+
+            # A2: Google Sheets
+            elif m_sheet:
+                sheet_id = m_sheet.group(1)
+                export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+                resp = session.get(export_url, headers=headers, timeout=25, allow_redirects=True)
+                if "accounts.google.com" in resp.url or "ServiceLogin" in resp.text:
+                    return {
+                        "ok": False,
+                        "error": "Bảng tính Google Sheets này đang ở chế độ RIÊNG TƯ. Vui lòng mở quyền công khai để Ming AI đọc dữ liệu."
+                    }
+                csv_text = resp.text.strip()
+                # Format CSV rows nicely
+                rows = []
+                reader = csv.reader(io.StringIO(csv_text))
+                for r in reader:
+                    if any(r):
+                        rows.append(" | ".join([cell.strip() for cell in r]))
+                full_text = "\n".join(rows)
+                return {
+                    "ok": True,
+                    "doc_type": "google_sheet",
+                    "sheet_id": sheet_id,
+                    "url": target,
+                    "row_count": len(rows),
+                    "char_count": len(full_text),
+                    "preview": full_text[:500],
+                    "content": full_text
+                }
+
+            # A3: Google Slides
+            elif m_slide:
+                slide_id = m_slide.group(1)
+                export_url = f"https://docs.google.com/presentation/d/{slide_id}/export/txt"
+                resp = session.get(export_url, headers=headers, timeout=25, allow_redirects=True)
+                text = resp.text.strip()
+                return {
+                    "ok": True,
+                    "doc_type": "google_slide",
+                    "slide_id": slide_id,
+                    "url": target,
+                    "char_count": len(text),
+                    "preview": text[:500],
+                    "content": text
+                }
+
+            # A4: Google Drive file (PDF, Word, Excel, Text, etc.)
+            elif m_file:
+                file_id = m_file.group(1)
+                dl_url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t"
+                resp = session.get(dl_url, headers=headers, timeout=35, allow_redirects=True)
+
+                if "accounts.google.com" in resp.url or "ServiceLogin" in resp.text:
+                    return {
+                        "ok": False,
+                        "error": "Tệp tin Google Drive này đang ở chế độ RIÊNG TƯ. Vui lòng mở quyền 'Bất kỳ ai có liên kết đều có thể xem' để Ming AI đọc được."
+                    }
+
+                content = resp.content
+                # Handle large file virus confirmation page
+                if b"confirm=" in content and b"Google Drive" in content:
+                    m_token = re.search(r"confirm=([0-9A-Za-z_-]+)", resp.text)
+                    if m_token:
+                        resp = session.get(f"{dl_url}&confirm={m_token.group(1)}", headers=headers, timeout=35, allow_redirects=True)
+                        content = resp.content
+
+                header = content[:16]
+                extracted_text = ""
+                doc_type = "google_drive_file"
+
+                # Check PDF
+                if header.startswith(b"%PDF-"):
+                    doc_type = "pdf_on_drive"
+                    if pypdf:
+                        try:
+                            reader = pypdf.PdfReader(io.BytesIO(content))
+                            pages = [p.extract_text() or "" for p in reader.pages]
+                            extracted_text = "\n\n".join(pages).strip()
+                        except Exception as e:
+                            return {"ok": False, "error": f"Lỗi đọc file PDF từ Google Drive: {str(e)}"}
+
+                # Check ZIP / DOCX / XLSX
+                elif header.startswith(b"PK\x03\x04"):
+                    try:
+                        with zipfile.ZipFile(io.BytesIO(content)) as z:
+                            if "word/document.xml" in z.namelist():
+                                doc_type = "docx_on_drive"
+                                if docx:
+                                    doc = docx.Document(io.BytesIO(content))
+                                    paras = [p.text for p in doc.paragraphs if p.text.strip()]
+                                    tables_text = []
+                                    for table in doc.tables:
+                                        for row in table.rows:
+                                            row_cells = [cell.text.strip() for cell in row.cells]
+                                            tables_text.append(" | ".join(row_cells))
+                                    extracted_text = "\n".join(paras)
+                                    if tables_text:
+                                        extracted_text += "\n\n### BẢNG DỮ LIỆU ĐÍNH KÈM:\n" + "\n".join(tables_text)
+                            elif "xl/workbook.xml" in z.namelist():
+                                doc_type = "xlsx_on_drive"
+                                if openpyxl:
+                                    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+                                    sheets_text = []
+                                    for sheet in wb.worksheets:
+                                        sheets_text.append(f"### SHEET: {sheet.title}")
+                                        for row in sheet.iter_rows(values_only=True):
+                                            if any(row):
+                                                clean_cells = [str(c).strip() if c is not None else "" for c in row]
+                                                sheets_text.append(" | ".join(clean_cells))
+                                    extracted_text = "\n".join(sheets_text).strip()
+                    except Exception:
+                        pass
+
+                # Fallback text
+                if not extracted_text:
+                    try:
+                        extracted_text = content.decode("utf-8", errors="replace").strip()
+                    except Exception:
+                        pass
+
+                if not extracted_text:
+                    return {"ok": False, "error": "Không trích xuất được nội dung chữ từ file Google Drive này."}
+
+                return {
+                    "ok": True,
+                    "doc_type": doc_type,
+                    "file_id": file_id,
+                    "url": target,
+                    "size_bytes": len(content),
+                    "char_count": len(extracted_text),
+                    "preview": extracted_text[:500],
+                    "content": extracted_text
+                }
+
+            # Generic web URL
+            else:
+                resp = session.get(target, headers=headers, timeout=20)
+                text = resp.text.strip()
+                return {
+                    "ok": True,
+                    "doc_type": "web_url",
+                    "url": target,
+                    "char_count": len(text),
+                    "preview": text[:500],
+                    "content": text
+                }
         except Exception as e:
-            return {"ok": False, "error": f"Lỗi tải tài liệu từ liên kết: {str(e)}"}
+            return {"ok": False, "error": f"Lỗi tải dữ liệu từ Google Drive/Web: {str(e)}"}
 
     # Case B: Local file path
-    # Search in common locations if relative or partial filename given
     possible_paths = [
         target,
         os.path.join("/app/workspace", target),
@@ -295,7 +433,6 @@ def tool_read_and_parse_file(args):
     if file_size == 0:
         return {"ok": False, "error": "Tệp tin rỗng (0 bytes)."}
 
-    # Magic byte check
     with open(file_path, "rb") as f:
         header = f.read(16)
 
@@ -550,11 +687,11 @@ TOOLS = {
         "fn": tool_rollback
     },
     "ceo_read_and_parse_file": {
-        "description": "Đọc và bóc tách toàn bộ nội dung từ tệp tin bất kỳ (Word .docx, PDF, Excel .xlsx, CSV, TXT, JSON, MD, hoặc liên kết Google Drive/Docs) do Anh Minh CEO gửi trong Zalo 1-1.",
+        "description": "Đọc và bóc tách toàn bộ nội dung từ tệp tin bất kỳ (Word .docx, PDF, Excel .xlsx, CSV, TXT, JSON, MD, hoặc liên kết Google Drive, Google Docs, Google Sheets, Google Slides) do Anh Minh CEO gửi trong Zalo 1-1.",
         "schema": {
             "type": "object",
             "properties": {
-                "file_path_or_url": {"type": "string", "description": "Đường dẫn tệp tin trên hệ thống hoặc liên kết Google Drive/Docs"},
+                "file_path_or_url": {"type": "string", "description": "Đường dẫn tệp tin trên hệ thống hoặc liên kết Google Drive/Docs/Sheets"},
                 "requester_zalo_uid": {"type": "string", "description": "UID Zalo của người gửi yêu cầu"}
             },
             "required": ["file_path_or_url"]
@@ -600,7 +737,7 @@ def handle(req):
     rid = req.get("id")
     try:
         if method == "initialize":
-            return {"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "ceo-coach", "version": "2.0.0"}}}
+            return {"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "ceo-coach", "version": "2.1.0"}}}
         if method == "notifications/initialized":
             return None
         if method == "tools/list":
