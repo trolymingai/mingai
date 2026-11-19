@@ -28,9 +28,9 @@ Ming AI bắt buộc nhận diện rõ ràng từng nhóm và nhân sự trong n
 
 | STT | Tên Nhóm Zalo | Mã Group ID | Chi Nhánh / Vai Trò | Nhân Sự Chủ Chốt Đã Xác Minh | Vai Trò & Ghi Chú |
 |---|---|---|---|---|---|
-| 1 | **Ming|Báo sự cố** | `2785144727994011019` | Tiếp nhận Sự Cố Toàn Hệ Thống | • **Phùng Văn Luyện** (`4218136593749622436`)<br/>• **Vinh Lê** (`3004262889646691740`)<br/>• **Trong Thu** (`5406476919941480746`)<br/>• **Phát** (`2701418892740908368`)<br/>• **Thanh Quân** (`3666295940077903564`)<br/>• **Huỳnh Nguyệt** (`5428716344187981947`)<br/>• **Ngô Ngọc** (`5945359089887665583`)<br/>• **Quangg** (`8323650366933171630`)<br/>• **Vương Minh** (`3322195382887364919`) | Kỹ thuật trưởng (Luyện), Kỹ thuật A2 (Vinh), Kỹ thuật Phước Thể (Thư), Kỹ thuật Camera PR (Phát), Quản lý/Thu ngân (Quân, Nguyệt, Ngọc, Quangg), CEO (Minh). BẮT BUỘC tạo task Odoo ngay. |
+| 1 | **Ming|Báo sự cố** | `2785144727994011019` | Tiếp nhận Sự Cố Toàn Hệ Thống | • **Phùng Văn Luyện** (`4218136593749622436`)<br/>• **Vinh Lê** (`3004262889646691740`)<br/>• **Trong Thu** (`5406476919941480746`)<br/>• **Phát** (`2701418892740908368`)<br/>• **Thanh Quân** (`3666295940077903564`)<br/>• **Huỳnh Nguyệt** (`5428716344187981947`)<br/>• **Ngô Ngọc** (Nam - gọi Anh) (`5945359089887665583`)<br/>• **Quangg** (`8323650366933171630`)<br/>• **Vương Minh** (`3322195382887364919`) | Kỹ thuật trưởng (Luyện), Kỹ thuật A2 (Vinh), Kỹ thuật Phước Thể (Thư), Kỹ thuật Camera PR (Phát), Quản lý/Thu ngân (Quân, Nguyệt, Ngọc, Quangg), CEO (Minh). BẮT BUỘC tạo task Odoo ngay. |
 | 2 | **Goo Phước Thể \| Tổng** | `8145378988362298919` | Chi nhánh The Goo Phước Thể (`PT`, Project #7) | • **Nguyễn Thị Hồng Vân** (`800492525149003062`)<br/>• **Thanh Quân** (`3666295940077903564`)<br/>• **Huỳnh Nguyệt** (`5428716344187981947`)<br/>• **Trong Thu** (`5406476919941480746`)<br/>• **Phùng Văn Luyện** (`4218136593749622436`) | CHT/Quản lý (Hồng Vân), Vận hành/Barista (Thanh Quân, Nguyệt), Kỹ thuật hỗ trợ (Thư, Luyện). |
-| 3 | **Goo-A2\|Tổng** | `5944076628365845072` | Chi nhánh The Goo A2 (`A2`, Project #6) | • **Ngô Ngọc** (`5945359089887665583`)<br/>• **Thông Nguyễn**<br/>• **Vinh Lê** (`3004262889646691740`)<br/>• **Vương Minh** (`3322195382887364919`) | Cửa hàng trưởng (Ngô Ngọc), Nhân sự quầy (Thông Nguyễn), Kỹ thuật (Vinh Lê). |
+| 3 | **Goo-A2\|Tổng** | `5944076628365845072` | Chi nhánh The Goo A2 (`A2`, Project #6) | • **Ngô Ngọc** (Nam - gọi Anh) (`5945359089887665583`)<br/>• **Thông Nguyễn**<br/>• **Vinh Lê** (`3004262889646691740`)<br/>• **Vương Minh** (`3322195382887364919`) | Cửa hàng trưởng (Ngô Ngọc), Nhân sự quầy (Thông Nguyễn), Kỹ thuật (Vinh Lê). |
 | 4 | **Goo-Lê Duẩn\| Tổng** | `2170546658158087218` | Chi nhánh The Goo Lê Duẩn (`LD`, Project #5) | • **Ngọc Thuỷ** (`7929867505413189409`)<br/>• **Khánh Vàng** (`3809417504593405168`)<br/>• **Thị Huyền** (`8027700215524395589`)<br/>• **Yến Trang** (`3715698198122507965`) | Quản lý/Barista/Phục vụ chi nhánh Lê Duẩn. |
 | 5 | **Ming PR\|Tổng** | `6099730162709364619` | Chi nhánh Ming Phan Rí (`PR`, Project #4) | • **Trúc Thanh** (`3244794313129568042`)<br/>• **Như Ý** (`4919547680453004392`)<br/>• **Phát** (`2701418892740908368`) | CHT/Nhân sự chi nhánh Phan Rí, Kỹ thuật (Phát). |
 | 6 | **MING A3\|Tổng** | `5435289813534943299` | Chi nhánh Ming A3 Liên Hương (`A3`, Project #2) | • Nhân sự ca sáng, ca tối, CHT A3 | Nhắc mở/đóng ca 07:30 - 21:45, checklist an toàn vệ sinh. |
@@ -114,7 +114,7 @@ Khi cần gửi tin nhắn riêng 1-1 (Direct Message) cho nhân sự, sử dụ
 | 3 | Thanh Quân | `3666295940077903564` | Barista / Vận hành The Goo Phước Thể |
 | 4 | Trọng Thư (Trong Thu) | `5406476919941480746` | Kỹ thuật The Goo Phước Thể |
 | 5 | Huỳnh Nguyệt | `5428716344187981947` | Nhân sự The Goo Phước Thể |
-| 6 | Ngô Ngọc | `5945359089887665583` | CHT The Goo A2 |
+| 6 | Ngô Ngọc | `5945359089887665583` | CHT The Goo A2 (Nam - bắt buộc gọi Anh) |
 | 7 | Vinh Lê | `3004262889646691740` | Kỹ thuật The Goo A2 |
 | 8 | Phát | `2701418892740908368` | Kỹ thuật Camera / Ming Phan Rí |
 | 9 | Nguyễn Thị Hồng Vân | `800492525149003062` | Quản trị / Điều hành |
