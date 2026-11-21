@@ -9,11 +9,10 @@ Nhiệm vụ:
 3. Nếu Trợ lý chỉ "nói miệng" mà chưa có Task/Cron -> Watchdog TỰ ĐỘNG BÙ ĐẮP:
    - Tự động tạo Task Odoo chuẩn xác.
    - Tự động lên lịch nhắc Cron đúng giờ hẹn.
-   - Tự động gạch tên nếu nhân sự báo hoàn thành.
-4. TỰ ĐỘNG BẮT ẢNH NGHIỆM THU & BÁO CÁO CHO ANH MINH CEO:
-   - Quét tin nhắn và hình ảnh nghiệm thu từ bạn Phát (hoặc trong nhóm Ming|Báo sự cố).
-   - Tự động chuyển Task #138 sang trạng thái HOÀN TẤT trên Odoo ERP.
-   - Tự động gửi thông báo báo cáo trực tiếp cho Anh Minh CEO và nhóm điều hành!
+4. QUY TRÌNH NGHIỆM THU & ĐÓNG TASK 2 CHIỀU (HUMAN-IN-THE-LOOP VERIFICATION):
+   - Khi nhân sự nhắn "Đã xong task [ID]" -> Ming hỏi xác nhận người giao việc/quản lý liên quan.
+   - Khi người liên quan nhắn "Xác nhận [ID]" hoặc "OK [ID]" -> Tự động chuyển Task sang [HOÀN TẤT] trên Odoo ERP.
+   - Tự động thông báo hoàn tất cho cả 2 bên và báo cáo Anh Minh CEO!
 """
 
 import sys
@@ -31,9 +30,23 @@ ODOO_API_KEY = "1362a613017363da65d6cbb7b3c831fa68a7a71e"
 
 INCIDENT_GROUP_ID = "2785144727994011019" # Ming|Báo sự cố
 MANAGEMENT_GROUP_ID = "3848125694699364170" # MING|Quản lý
+PENDING_FILE = "/opt/goclaw/task_completion_pending.json"
 
 def get_odoo_models():
     return xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object", allow_none=True)
+
+def load_pending():
+    if os.path.exists(PENDING_FILE):
+        try:
+            with open(PENDING_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_pending(data):
+    with open(PENDING_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def send_zalo_message(to, text):
     js_code = f"""
@@ -77,6 +90,7 @@ ws.addEventListener('message', (event) => {{
 def scan_and_enforce():
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     now_vn = now_utc + datetime.timedelta(hours=7)
+    now_str = now_vn.strftime('%Y-%m-%d %H:%M:%S')
 
     # 1. Query recent user messages in the last 15 minutes across operational groups
     cmd = [
@@ -90,8 +104,10 @@ def scan_and_enforce():
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0 or not res.stdout.strip():
-        # Vẫn kiểm tra xem có kiểm tra nghiệm thu định kỳ không
         return
+
+    models = get_odoo_models()
+    pending = load_pending()
 
     lines = res.stdout.strip().split('\n')
     for line in lines:
@@ -101,13 +117,124 @@ def scan_and_enforce():
         if len(parts) < 3:
             continue
         session_key, content, msg_time = parts
+        lower = content.lower()
 
         # Case A: Giao việc có hẹn giờ + nhắc hẹn -> Tự động bù đắp nếu thiếu
-        if ("nhắc hẹn" in content.lower() or "hẹn" in content.lower()) and ("camera" in content.lower() or "mạng" in content.lower()):
+        if ("nhắc hẹn" in lower or "hẹn" in lower) and ("camera" in lower or "mạng" in lower):
             check_and_enforce_camera_task(content, session_key, now_vn)
 
-        # Case B: Bạn Phát gửi ảnh hoặc báo cáo hoàn thành/nghiệm thu
-        check_and_enforce_camera_acceptance(content, session_key, now_vn)
+        # Case B: Nhân sự nhắn báo hoàn thành task: "đã xong task 138", "xong task 138"
+        m_done = re.search(r'(?:đã xong|xong|hoàn thành|nghiệm thu)\s*(?:task|phiếu|công việc)?\s*#?(\d+)', lower)
+        if not m_done:
+            m_done = re.search(r'(?:task|phiếu)\s*#?(\d+)\s*(?:đã xong|xong|hoàn thành)', lower)
+
+        if m_done:
+            tid = int(m_done.group(1))
+            tid_str = str(tid)
+            tasks = models.execute_kw(ODOO_DB, ODOO_UID, ODOO_API_KEY, 'project.task', 'search_read', [
+                [('id', '=', tid)]
+            ], {'fields': ['id', 'name', 'stage_id', 'user_ids', 'description', 'project_id']})
+
+            if tasks:
+                task = tasks[0]
+                stage_id = task['stage_id'][0] if task.get('stage_id') else 1
+                if stage_id != 6: # Chưa Hoàn tất
+                    if tid_str not in pending or pending[tid_str].get('status') != 'waiting_verification':
+                        verifier_uid = "4218136593749622436" # Anh Phùng Văn Luyện
+                        verifier_name = "Anh Phùng Văn Luyện"
+
+                        reporter_uid = session_key.split(':direct:')[-1] if ':direct:' in session_key else None
+                        reporter_name = "Nhân sự"
+                        m_sender = re.search(r'(?:Người gửi|From):\s*([^\n\]]+)', content)
+                        if m_sender:
+                            reporter_name = m_sender.group(1).strip()
+
+                        pending[tid_str] = {
+                            "task_id": tid,
+                            "task_name": task['name'],
+                            "reported_by_uid": reporter_uid,
+                            "reported_by_name": reporter_name,
+                            "verifier_uid": verifier_uid,
+                            "verifier_name": verifier_name,
+                            "status": "waiting_verification",
+                            "reported_at": now_str
+                        }
+                        save_pending(pending)
+
+                        # Gửi yêu cầu xác nhận nghiệm thu tới người phụ trách/giao việc
+                        req_msg = (
+                            f"🔔 [YÊU CẦU XÁC NHẬN NGHIỆM THU]\n"
+                            f"Dạ em chào {verifier_name}!\n"
+                            f"Bạn {reporter_name} vừa báo đã làm xong công việc:\n"
+                            f"📋 Task #{tid}: {task['name']}\n\n"
+                            f"Anh kiểm tra thực tế giúp em, nếu đạt yêu cầu anh chỉ cần nhắn lại:\n"
+                            f"👉 \"Xác nhận {tid}\" hoặc \"OK {tid}\" để em bấm Hoàn tất task trên Odoo ERP nhé!\n"
+                            f"(Nếu chưa đạt, anh nhắn \"Chưa đạt {tid}\" kèm lý do để bạn xử lý lại ạ)."
+                        )
+                        send_zalo_message(verifier_uid, req_msg)
+
+                        # Phản hồi cho người báo
+                        reply_target = reporter_uid if reporter_uid else session_key.split(':')[-1]
+                        reply_msg = (
+                            f"Dạ em ghi nhận bạn {reporter_name} đã báo hoàn tất Task #{tid} rồi nghen!\n"
+                            f"Em đã gửi tin nhắn xác nhận nghiệm thu tới {verifier_name}. Ngay khi anh Luyện xác nhận OK, hệ thống sẽ tự động bấm Hoàn tất task trên Odoo ERP giúp bạn nhé! ✨\n\n"
+                            f"✨ Chú tâm từng chi tiết, trọn vẹn từng tách cà phê."
+                        )
+                        send_zalo_message(reply_target, reply_msg)
+                        print(f"[{now_str}] Đã gửi yêu cầu xác nhận Task #{tid} tới {verifier_name}")
+
+        # Case C: Người phụ trách xác nhận hoàn thành: "xác nhận 138", "ok 138", "duyệt 138"
+        m_confirm = re.search(r'(?:xác nhận|ok|đồng ý|duyệt|nghiệm thu đạt)\s*#?(\d+)', lower)
+        if not m_confirm:
+            m_confirm = re.search(r'#?(\d+)\s*(?:ok|xác nhận|duyệt)', lower)
+
+        if m_confirm:
+            tid = int(m_confirm.group(1))
+            tid_str = str(tid)
+            if tid_str in pending and pending[tid_str].get('status') == 'waiting_verification':
+                p_info = pending[tid_str]
+                # Đóng task trên Odoo
+                models.execute_kw(ODOO_DB, ODOO_UID, ODOO_API_KEY, 'project.task', 'write', [
+                    [tid],
+                    {'stage_id': 6, 'state': '1_done'}
+                ])
+                p_info['status'] = 'completed'
+                p_info['completed_at'] = now_str
+                save_pending(pending)
+
+                rep_name = p_info.get('reported_by_name', 'Bạn')
+                rep_uid = p_info.get('reported_by_uid')
+                ver_name = p_info.get('verifier_name', 'Quản lý')
+                ver_uid = p_info.get('verifier_uid')
+                t_name = p_info.get('task_name', f'Task #{tid}')
+
+                # 1. Báo cho người làm
+                if rep_uid:
+                    msg_done_rep = (
+                        f"🎉 [TASK ĐÃ HOÀN TẤT TRÊN ODOO ERP]\n"
+                        f"Chào bạn {rep_name}!\n"
+                        f"{ver_name} đã xác nhận nghiệm thu công việc của bạn đạt yêu cầu:\n"
+                        f"📋 Task #{tid}: {t_name}\n\n"
+                        f"Hệ thống đã tự động chuyển task sang trạng thái [HOÀN TẤT] trên Odoo ERP thành công rồi nghen! Cảm ơn bạn rất nhiều! ✨\n\n"
+                        f"✨ Chú tâm từng chi tiết, trọn vẹn từng tách cà phê."
+                    )
+                    send_zalo_message(rep_uid, msg_done_rep)
+
+                # 2. Báo cho người duyệt
+                if ver_uid:
+                    msg_done_ver = (
+                        f"Dạ em cảm ơn {ver_name}!\n"
+                        f"Em đã ghi nhận xác nhận của anh và bấm Hoàn tất Task #{tid} trên Odoo ERP thành công rồi ạ! ✨"
+                    )
+                    send_zalo_message(ver_uid, msg_done_ver)
+
+                # 3. Báo cáo Anh Minh CEO (nhóm Quản lý)
+                msg_ceo = (
+                    f"📊 [BÁO CÁO TIẾN ĐỘ ĐIỀU HÀNH] @Vương Minh\n\n"
+                    f"Dạ em báo cáo Anh Minh CEO: Task #{tid} ({t_name}) do bạn {rep_name} phụ trách đã được {ver_name} xác nhận nghiệm thu và hệ thống đã đóng [HOÀN TẤT] trên Odoo ERP thành công rồi ạ! ✨"
+                )
+                send_zalo_message(MANAGEMENT_GROUP_ID, msg_ceo)
+                print(f"[{now_str}] Đã hoàn tất đóng Task #{tid} trên Odoo và gửi thông báo đa chiều!")
 
 def check_and_enforce_camera_task(content, session_key, now_vn):
     models = get_odoo_models()
@@ -127,52 +254,6 @@ def check_and_enforce_camera_task(content, session_key, now_vn):
         }
         task_id = models.execute_kw(ODOO_DB, ODOO_UID, ODOO_API_KEY, 'project.task', 'create', [vals])
         print(f"[{now_vn}] [WATCHDOG] Đã tự động bù đắp tạo Task #{task_id} trên Odoo ERP!")
-
-def check_and_enforce_camera_acceptance(content, session_key, now_vn):
-    # Kiểm tra xem có phải nội dung từ nhóm Báo sự cố hoặc nhóm Quản lý
-    # hoặc có dấu hiệu hoàn tất công việc của Phát
-    lower_content = content.lower()
-    has_photo = "<media:image" in content or "[user sent an image" in lower_content or "đã gửi 1 ảnh" in lower_content
-    is_phat = "phát" in lower_content or "2701418892740908368" in session_key or "người gửi: phát" in lower_content
-    is_relevant_topic = any(kw in lower_content for kw in ["camera", "mạng", "dây", "cáp", "nghiệm thu", "xong rồi", "làm gọn", "hoàn thành", "đã xong"])
-
-    # Điều kiện: Phát gửi ảnh hoặc nói xong việc, hoặc trong nhóm Báo sự cố có ảnh nghiệm thu
-    if (is_phat and (has_photo or is_relevant_topic)) or (INCIDENT_GROUP_ID in session_key and has_photo and is_relevant_topic):
-        models = get_odoo_models()
-        # Tìm Task 138 hoặc Task camera hôm nay
-        tasks = models.execute_kw(ODOO_DB, ODOO_UID, ODOO_API_KEY, 'project.task', 'search_read', [
-            [('id', '=', 138)]
-        ], {'fields': ['id', 'name', 'stage_id']})
-
-        if tasks:
-            task = tasks[0]
-            stage_id = task['stage_id'][0] if task.get('stage_id') else 1
-            # Nếu chưa sang Stage 6 (Hoàn tất)
-            if stage_id != 6:
-                # 1. Chuyển Task sang Hoàn tất
-                models.execute_kw(ODOO_DB, ODOO_UID, ODOO_API_KEY, 'project.task', 'write', [
-                    [138],
-                    {'stage_id': 6, 'state': '1_done'}
-                ])
-                print(f"[{now_vn}] [WATCHDOG] Đã tự động chuyển Task #138 sang trạng thái [HOÀN TẤT] trên Odoo ERP!")
-
-                # 2. Gửi thông báo nghiệm thu vào nhóm Báo sự cố
-                msg_incident = (
-                    "✅ [NGHIỆM THU HOÀN TẤT] Bạn Phát đã gửi hình ảnh nghiệm thu công việc lắp camera và làm gọn quầy mạng tại xưởng rang!\n\n"
-                    "📋 Trạng thái Odoo ERP: Phiếu công việc Task #138 đã được tự động nghiệm thu và chuyển sang [HOÀN TẤT].\n"
-                    "Em xin báo cáo anh Phùng Văn Luyện và Anh Minh CEO cùng nắm tiến độ ạ! ✨\n\n"
-                    "✨ Chú tâm từng chi tiết, trọn vẹn từng tách cà phê."
-                )
-                send_zalo_message(INCIDENT_GROUP_ID, msg_incident)
-
-                # 3. Gửi thông báo báo cáo trực tiếp đến Anh Minh CEO (nhóm Quản lý)
-                msg_ceo = (
-                    "📊 [BÁO CÁO TIẾN ĐỘ ĐIỀU HÀNH] @Vương Minh\n\n"
-                    "Dạ em báo cáo Anh Minh CEO: Bạn Phát đã hoàn tất nghiệm thu và gửi hình ảnh công việc kỹ thuật camera, dây tín hiệu tại xưởng rang theo đúng chỉ đạo của anh Phùng Văn Luyện.\n\n"
-                    "Hệ thống đã tự động ghi nhận nghiệm thu và đóng Task #138 trên Odoo ERP thành công rồi ạ! ✨"
-                )
-                send_zalo_message(MANAGEMENT_GROUP_ID, msg_ceo)
-                print(f"[{now_vn}] [WATCHDOG] Đã tự động bắn tin báo cáo nghiệm thu cho Anh Minh CEO và nhóm Báo sự cố!")
 
 if __name__ == '__main__':
     scan_and_enforce()
