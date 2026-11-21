@@ -132,9 +132,7 @@ func (c *Channel) handleGroupMessage(msg protocol.GroupMessage) {
 
 	// Step 2: @mention gating — in group chats, Ming AI MUST ONLY respond when explicitly tagged or mentioned!
 	// We check both official Zalo mention tag (m.UID == botUID) and plaintext tag (@Ming, @Troly Ming, etc.)
-	// Special Case: Auto-catch all messages in "Ming|Báo sự cố" (threadID: 2785144727994011019) without requiring @mention
-	isIncidentGroup := (threadID == "2785144727994011019")
-	wasMentioned := c.checkBotMentioned(msg.Data.Mentions) || isBotMentionedInText(content) || isIncidentGroup
+	wasMentioned := c.checkBotMentioned(msg.Data.Mentions) || isBotMentionedInText(content)
 	if c.RequireMention() && !wasMentioned {
 		c.GroupHistory().Record(threadID, channels.HistoryEntry{
 			Sender:    senderName,
