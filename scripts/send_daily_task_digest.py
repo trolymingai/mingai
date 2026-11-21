@@ -6,7 +6,7 @@ Gửi báo cáo tổng hợp task vụ cuối ngày đến từng nhân sự ph�
 1. Quét Odoo ERP các task chưa hoàn tất (stage_id != 6).
 2. Gom task theo từng nhân sự dựa vào mapping hr.employee (work_phone -> Zalo UID).
 3. Gửi tin nhắn Zalo riêng (Direct Message) kèm link đăng nhập trực tiếp vào từng task.
-4. Cung cấp hướng dẫn báo xong 2 chiều qua Trợ lý Ming.
+4. Kèm thông tin tài khoản & mật khẩu đăng nhập Odoo ERP (Ming@123) để nhân sự vào bấm Hoàn tất.
 """
 
 import sys
@@ -21,6 +21,7 @@ ODOO_DB = "odoo_minghouse"
 ODOO_UID = 2
 ODOO_KEY = "1362a613017363da65d6cbb7b3c831fa68a7a71e"
 BASE_ERP_URL = "https://erp.mingcoffeemore.com"
+INITIAL_PASSWORD = "Ming@123"
 
 def get_odoo_models():
     return xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object", allow_none=True)
@@ -70,7 +71,13 @@ def build_task_digest():
     models = get_odoo_models()
     now_vn = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=7)))
 
-    # 1. Get employees mapping
+    # 1. Get users info (id, name, login)
+    users = models.execute_kw(ODOO_DB, ODOO_UID, ODOO_KEY, 'res.users', 'search_read', [
+        [('active', '=', True)]
+    ], {'fields': ['id', 'name', 'login']})
+    user_logins = {u['id']: u['login'] for u in users}
+
+    # 2. Get employees mapping
     emps = models.execute_kw(ODOO_DB, ODOO_UID, ODOO_KEY, 'hr.employee', 'search_read', [
         [('work_phone', '!=', False), ('user_id', '!=', False)]
     ], {'fields': ['id', 'name', 'user_id', 'work_phone']})
@@ -81,15 +88,16 @@ def build_task_digest():
         user_to_emp[uid] = {
             'name': e['name'],
             'zalo_id': e['work_phone'],
-            'emp_id': e['id']
+            'emp_id': e['id'],
+            'login': user_logins.get(uid, f"{uid}@mingcoffeemore.com")
         }
 
-    # 2. Get active tasks (stage_id != 6, excluding repetitive checklist surveys)
+    # 3. Get active tasks (stage_id != 6, excluding repetitive checklist surveys)
     tasks = models.execute_kw(ODOO_DB, ODOO_UID, ODOO_KEY, 'project.task', 'search_read', [
         [('stage_id', '!=', 6), ('name', 'not ilike', 'Checklist')]
     ], {'fields': ['id', 'name', 'project_id', 'user_ids', 'stage_id', 'date_deadline', 'create_uid'], 'order': 'id desc'})
 
-    # 3. Group by employee
+    # 4. Group by employee
     emp_tasks = {}
     for t in tasks:
         for u in t.get('user_ids', []):
@@ -102,7 +110,7 @@ def build_task_digest():
 
     return emp_tasks, now_vn
 
-def format_message(emp_name, tasks, now_vn):
+def format_message(emp_name, login, tasks, now_vn):
     date_str = now_vn.strftime('%d/%m/%Y')
     msg = f"📋 [MING AI - TỔNG HỢP NHIỆM VỤ CUỐI NGÀY {date_str}]\n"
     msg += f"Chào bạn {emp_name}! Hiện tại bạn đang phụ trách {len(tasks)} đầu việc trên hệ thống Odoo ERP:\n\n"
@@ -110,15 +118,20 @@ def format_message(emp_name, tasks, now_vn):
     for idx, t in enumerate(tasks, 1):
         tid = t['id']
         tname = t['name']
-        deadline = t.get('date_deadline') or "Đang xử lý"
+        deadline = t.get('date_deadline') or "Đang xử lý trong ngày"
         link = f"{BASE_ERP_URL}/web#id={tid}&model=project.task&view_type=form"
         msg += f"{idx}️⃣ Task #{tid}: {tname}\n"
         msg += f"   • Hạn chót: {deadline}\n"
         msg += f"   • Link vào task: {link}\n\n"
 
-    msg += "💡 CÁCH HOÀN TẤT ĐẦU VIỆC:\n"
-    msg += "• Cách 1: Bấm vào link tương ứng ở trên để đăng nhập Odoo và bấm nút [Hoàn tất].\n"
-    msg += "• Cách 2: Bạn chỉ cần nhắn lại cho Trợ lý Ming: 'Đã xong Task [Mã số]' (kèm ảnh nghiệm thu nếu có). Ming sẽ tự động kiểm tra xác nhận với người giao việc và bấm Hoàn tất giúp bạn nghen!\n\n"
+    msg += "🔑 THÔNG TIN ĐĂNG NHẬP ODOO CỦA BẠN:\n"
+    msg += f"   • Tên đăng nhập (Login): {login}\n"
+    msg += f"   • Mật khẩu khởi tạo: {INITIAL_PASSWORD}\n\n"
+
+    msg += "👉 HƯỚNG DẪN HOÀN TẤT ĐẦU VIỆC:\n"
+    msg += "1. Bấm vào link task tương ứng ở trên để mở trên điện thoại/máy tính.\n"
+    msg += "2. Nhập Tên đăng nhập và Mật khẩu ở trên để đăng nhập (trình duyệt sẽ tự động lưu cho các lần sau).\n"
+    msg += "3. Kiểm tra nội dung công việc và bấm nút [Hoàn tất] để đóng task trên hệ thống.\n\n"
     msg += "✨ Chú tâm từng chi tiết, trọn vẹn từng tách cà phê."
     return msg
 
@@ -136,8 +149,9 @@ def main():
         if target_uid and zid != target_uid:
             continue
         emp_name = data['info']['name']
+        login = data['info'].get('login', '')
         tasks = data['tasks']
-        msg = format_message(emp_name, tasks, now_vn)
+        msg = format_message(emp_name, login, tasks, now_vn)
 
         print(f"\n==================== [TO: {emp_name} - Zalo: {zid}] ====================")
         print(msg)
