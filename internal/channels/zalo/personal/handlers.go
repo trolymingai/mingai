@@ -132,7 +132,9 @@ func (c *Channel) handleGroupMessage(msg protocol.GroupMessage) {
 
 	// Step 2: @mention gating — in group chats, Ming AI MUST ONLY respond when explicitly tagged or mentioned!
 	// We check both official Zalo mention tag (m.UID == botUID) and plaintext tag (@Ming, @Troly Ming, etc.)
-	wasMentioned := c.checkBotMentioned(msg.Data.Mentions) || isBotMentionedInText(content)
+	// Special Case: Auto-catch all messages in "Ming|Báo sự cố" (threadID: 2785144727994011019) without requiring @mention
+	isIncidentGroup := (threadID == "2785144727994011019")
+	wasMentioned := c.checkBotMentioned(msg.Data.Mentions) || isBotMentionedInText(content) || isIncidentGroup
 	if c.RequireMention() && !wasMentioned {
 		c.GroupHistory().Record(threadID, channels.HistoryEntry{
 			Sender:    senderName,
@@ -264,40 +266,74 @@ func extractContentAndMedia(content protocol.Content) (string, []string) {
 		return text, nil
 	}
 	att := content.ParseAttachment()
-	if att == nil || att.Href == "" {
+	if att == nil {
 		return "", nil
 	}
-
-	// Download the attachment file.
-	filePath, err := downloadFile(context.Background(), att.Href)
-	if err != nil {
-		slog.Warn("zalo_personal: failed to download attachment", "url", att.Href, "error", err)
-		// Return human-readable fallback so the message isn't silently dropped.
+	fileURL := att.GetURL()
+	if fileURL == "" {
 		if text := content.AttachmentText(); text != "" {
 			return text, nil
 		}
 		return "", nil
 	}
 
-	// Classify by MIME type (image, video, audio, document) — same as Discord/Feishu.
-	mimeType := media.DetectMIMEType(filePath)
+	// Download the attachment file.
+	filePath, err := downloadFile(context.Background(), fileURL)
+	if err != nil {
+		slog.Warn("zalo_personal: failed to download attachment", "url", fileURL, "error", err)
+		if text := content.AttachmentText(); text != "" {
+			return text, nil
+		}
+		return "", nil
+	}
+
+	// Detect MIME type via content sniffing (first 512 bytes) with fallback to extension
+	mimeType := detectFileMIME(filePath)
 	mediaKind := media.MediaKindFromMime(mimeType)
 
-	// For images, also check via Zalo CDN path patterns (e.g. /jpg/, /png/) since
-	// temp files lose the original extension context.
 	if mediaKind != media.TypeImage && att.IsImage() {
 		mediaKind = media.TypeImage
+		if !strings.HasPrefix(mimeType, "image/") {
+			mimeType = "image/jpeg"
+		}
 	}
+	if mediaKind != media.TypeVideo && att.IsVideo() {
+		mediaKind = media.TypeVideo
+		if !strings.HasPrefix(mimeType, "video/") {
+			mimeType = "video/mp4"
+		}
+	}
+
+	title := att.GetTitle()
 
 	// Build the <media:*> tag that the agent loop's enrichImageIDs/enrichMediaIDs expects.
 	tag := media.BuildMediaTags([]media.MediaInfo{{
 		Type:        mediaKind,
 		FilePath:    filePath,
 		ContentType: mimeType,
-		FileName:    att.Title,
+		FileName:    title,
 	}})
 
+	if title != "" && title != filepath.Base(filePath) {
+		return fmt.Sprintf("%s\n%s", title, tag), []string{filePath}
+	}
 	return tag, []string{filePath}
+}
+
+func detectFileMIME(filePath string) string {
+	f, err := os.Open(filePath)
+	if err == nil {
+		buf := make([]byte, 512)
+		n, _ := f.Read(buf)
+		f.Close()
+		if n > 0 {
+			detected := http.DetectContentType(buf[:n])
+			if detected != "application/octet-stream" {
+				return detected
+			}
+		}
+	}
+	return media.DetectMIMEType(filePath)
 }
 
 const maxMediaBytes = 20 * 1024 * 1024 // 20MB (matches Telegram default)
@@ -331,7 +367,20 @@ func downloadFile(ctx context.Context, fileURL string) (string, error) {
 	}
 	ext := filepath.Ext(path)
 	if ext == "" || len(ext) > 5 {
-		ext = ".bin"
+		lowerURL := strings.ToLower(fileURL)
+		if strings.Contains(lowerURL, "/jpg/") || strings.Contains(lowerURL, "/jpeg/") {
+			ext = ".jpg"
+		} else if strings.Contains(lowerURL, "/png/") {
+			ext = ".png"
+		} else if strings.Contains(lowerURL, "/gif/") {
+			ext = ".gif"
+		} else if strings.Contains(lowerURL, "/webp/") {
+			ext = ".webp"
+		} else if strings.Contains(lowerURL, "/video/") || strings.Contains(lowerURL, "/mp4/") {
+			ext = ".mp4"
+		} else {
+			ext = ".bin"
+		}
 	}
 
 	tmpFile, err := os.CreateTemp("", "goclaw_zca_*"+ext)
@@ -386,6 +435,7 @@ func isOnlyEmojiOrSticker(text string) bool {
 	return hasRune
 }
 
+
 // isBotMentionedInText checks if the bot is explicitly tagged or mentioned in the message text.
 // Requires explicit '@' prefix or targeted bot summon phrase.
 func isBotMentionedInText(content string) bool {
@@ -398,6 +448,9 @@ func isBotMentionedInText(content string) bool {
 		"@trợlýming",
 		"@ming ai",
 		"@mingai",
+		"@ming coffee",
+		"@ming coffee roastery",
+		"@mingcoffeeroastery",
 		"@troly",
 		"@trợ lý",
 		"@bot",

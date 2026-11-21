@@ -114,3 +114,4 @@ goclaw-new
 __pycache__/
 *.sqlite
 vault/
+goclaw-test

@@ -88,8 +88,48 @@ func (c Content) Text() string {
 
 // Attachment holds parsed fields from a non-text content object.
 type Attachment struct {
-	Title string `json:"title"`
-	Href  string `json:"href"`
+	Title       string `json:"title"`
+	Desc        string `json:"desc"`
+	Description string `json:"description"`
+	Caption     string `json:"caption"`
+	FileName    string `json:"fileName"`
+	Name        string `json:"name"`
+
+	Href      string `json:"href"`
+	URL       string `json:"url"`
+	NormalURL string `json:"normalUrl"`
+	HDUrl     string `json:"hdUrl"`
+	ThumbURL  string `json:"thumbUrl"`
+	RawURL    string `json:"rawUrl"`
+	OriURL    string `json:"oriUrl"`
+	FileURL   string `json:"fileUrl"`
+	VideoURL  string `json:"videoUrl"`
+}
+
+// GetURL returns the highest-fidelity media URL available in the attachment.
+func (a *Attachment) GetURL() string {
+	if a == nil {
+		return ""
+	}
+	for _, u := range []string{a.HDUrl, a.NormalURL, a.RawURL, a.OriURL, a.FileURL, a.VideoURL, a.Href, a.URL, a.ThumbURL} {
+		if u != "" {
+			return u
+		}
+	}
+	return ""
+}
+
+// GetTitle returns any available caption, title, or filename.
+func (a *Attachment) GetTitle() string {
+	if a == nil {
+		return ""
+	}
+	for _, t := range []string{a.Title, a.Desc, a.Description, a.Caption, a.FileName, a.Name} {
+		if t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // ParseAttachment extracts attachment metadata from non-text content.
@@ -107,23 +147,48 @@ func (c Content) ParseAttachment() *Attachment {
 
 // imageExts lists file extensions recognized as images by the agent's vision pipeline.
 var imageExts = map[string]bool{
-	".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true,
+	".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true, ".bmp": true,
 }
 
-// IsImage reports whether the attachment href points to an image file.
-// Checks both file extension and Zalo CDN path patterns (e.g. /jpg/, /png/).
+// videoExts lists file extensions recognized as videos by the agent's media pipeline.
+var videoExts = map[string]bool{
+	".mp4": true, ".mov": true, ".avi": true, ".mkv": true, ".webm": true, ".3gp": true, ".flv": true,
+}
+
+// IsImage reports whether the attachment points to an image file.
 func (a *Attachment) IsImage() bool {
-	if a == nil || a.Href == "" {
+	if a == nil {
 		return false
 	}
-	path := strings.SplitN(a.Href, "?", 2)[0]
+	u := a.GetURL()
+	if u == "" {
+		return false
+	}
+	path := strings.SplitN(u, "?", 2)[0]
 	if imageExts[strings.ToLower(filepath.Ext(path))] {
 		return true
 	}
-	// Zalo CDN paths like https://f20-zpc.zdn.vn/jpg/...
 	lower := strings.ToLower(path)
 	return strings.Contains(lower, "/jpg/") || strings.Contains(lower, "/png/") ||
-		strings.Contains(lower, "/gif/") || strings.Contains(lower, "/webp/")
+		strings.Contains(lower, "/gif/") || strings.Contains(lower, "/webp/") ||
+		a.NormalURL != "" || a.HDUrl != "" || a.RawURL != ""
+}
+
+// IsVideo reports whether the attachment points to a video file.
+func (a *Attachment) IsVideo() bool {
+	if a == nil {
+		return false
+	}
+	u := a.GetURL()
+	if u == "" {
+		return false
+	}
+	path := strings.SplitN(u, "?", 2)[0]
+	if videoExts[strings.ToLower(filepath.Ext(path))] {
+		return true
+	}
+	lower := strings.ToLower(path)
+	return strings.Contains(lower, "/video/") || strings.Contains(lower, "/mp4/") || a.VideoURL != ""
 }
 
 // AttachmentText returns a human-readable placeholder for non-text content.
@@ -132,15 +197,22 @@ func (c Content) AttachmentText() string {
 	if att == nil {
 		return ""
 	}
+	title := att.GetTitle()
 	if att.IsImage() {
-		if att.Title != "" {
-			return fmt.Sprintf("[User sent an image: %s]", att.Title)
+		if title != "" {
+			return fmt.Sprintf("[User sent an image: %s]", title)
 		}
 		return "[User sent an image]"
 	}
-	if att.Href != "" {
-		if att.Title != "" {
-			return fmt.Sprintf("[User sent a file: %s]", att.Title)
+	if att.IsVideo() {
+		if title != "" {
+			return fmt.Sprintf("[User sent a video: %s]", title)
+		}
+		return "[User sent a video]"
+	}
+	if att.GetURL() != "" {
+		if title != "" {
+			return fmt.Sprintf("[User sent a file: %s]", title)
 		}
 		return "[User sent a file]"
 	}
